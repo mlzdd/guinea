@@ -39,6 +39,9 @@ export class PigModel {
   private readonly eyes: THREE.Mesh[] = []
   private readonly feet: THREE.Mesh[] = []
   readonly shadow: THREE.Mesh
+  private rosette: THREE.Group | null = null
+  /** A rounder tummy while she's expecting. */
+  private readonly belly: THREE.Mesh
 
   constructor(look: PigLook) {
     const [base, patch, patch2] = look.coat
@@ -127,6 +130,37 @@ export class PigModel {
     b.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = false
     })
+    this.belly = part(bodyGeo, base, [0.25, 0.16, 0.27], [0, 0.15, 0.04])
+    this.belly.visible = false
+    b.add(this.belly)
+    this.setRosettes(look.rosettes ?? 0)
+  }
+
+  setPregnant(on: boolean) {
+    this.belly.visible = on
+  }
+
+  /** A prize rosette pinned on the side for pig show winners: blue, then red, then gold for 3+. */
+  setRosettes(n: number) {
+    if (this.rosette) this.body.remove(this.rosette)
+    this.rosette = null
+    if (!n) return
+    const color = n >= 3 ? 0xf2c230 : n === 2 ? 0xe8453c : 0x3c7ee8
+    const g = new THREE.Group()
+    const ring = new THREE.Mesh(new THREE.CircleGeometry(0.075, 14), mat(color))
+    const middle = new THREE.Mesh(new THREE.CircleGeometry(0.035, 12), mat(0xfff6e0))
+    middle.position.z = 0.002
+    g.add(ring, middle)
+    for (const side of [-1, 1]) {
+      const tail = new THREE.Mesh(new THREE.PlaneGeometry(0.03, 0.09), mat(color))
+      tail.position.set(side * 0.025, -0.09, -0.001)
+      tail.rotation.z = side * 0.25
+      g.add(tail)
+    }
+    g.position.set(0.225, 0.24, 0.02)
+    g.rotation.y = Math.PI / 2
+    this.body.add(g)
+    this.rosette = g
   }
 
   /**
@@ -179,6 +213,11 @@ export class PigModel {
         roll = Math.sin(tt * 14) * 0.2
         break
       }
+      case 'zoom':
+        // Racing about with little twisty hops.
+        y += Math.abs(Math.sin(tt * 9)) * 0.12
+        twist = Math.sin(tt * 9) * 0.3
+        break
       case 'beg':
         tilt = -0.35
         headTilt = -0.2

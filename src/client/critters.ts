@@ -114,14 +114,23 @@ export class FarmerModel {
     this.throwT = 0
   }
 
-  /** `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour. */
-  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false) {
+  /**
+   * `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour;
+   * `airborne` = mid-jump. Sets the walking bob as root.position.y: add the feet height after.
+   */
+  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false, airborne = false) {
     this.sack.visible = sack
     this.walkPhase += dt * Math.min(speed, 9) * 2.2
     const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
     this.legs[0].rotation.x = swing
     this.legs[1].rotation.x = -swing
     this.root.position.y = speed > 0.3 ? Math.abs(Math.cos(this.walkPhase)) * 0.05 : 0
+    if (airborne) {
+      // Knees tucked.
+      this.root.position.y = 0
+      this.legs[0].rotation.x = 0.6
+      this.legs[1].rotation.x = -0.4
+    }
     const [left, right] = this.arms
     if (holding) {
       // Both arms out in front, cradling a pig.

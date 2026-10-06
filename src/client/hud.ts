@@ -1,6 +1,22 @@
 import { BREED_NAMES, type PigLook } from '../core/pigs.ts'
-import type { AlertKind, FarmerSnap, PigSnap, ServerMsg } from '../core/protocol.ts'
-import { FARMER_COLORS, ISSUE_BIT, NIGHT_START, UPGRADES, UPGRADE_IDS, VEGGIES, type Issue, type UpgradeId } from '../core/rules.ts'
+import type { AlertKind, DiaryRow, FarmerSnap, JobSnap, PigSnap, ServerMsg } from '../core/protocol.ts'
+import { SQUARES, canBuy } from '../core/map.ts'
+import {
+  FARMER_COLORS,
+  ISSUE_BIT,
+  LAND,
+  NIGHT_START,
+  SHOP_TABS,
+  UPGRADES,
+  UPGRADE_IDS,
+  VEGGIES,
+  type Issue,
+  type ShopTab,
+  type SquareId,
+  type Stat,
+  type UpgradeId,
+  type Veg,
+} from '../core/rules.ts'
 import { VEG_ICON, VEG_LABEL } from './veg.ts'
 
 const $ = (id: string) => document.getElementById(id)!
@@ -21,7 +37,33 @@ export interface CheckActions {
   treat(issue: Issue): void
   cuddle(): void
   putDown(): void
+  rename(name: string): void
+  adopt(): void
 }
+
+/** Extra lines for the check card: is this pig yours, and who's family. */
+export interface CheckExtra {
+  myName: string
+  family: string
+}
+
+/** The farm diary's awards: who's top at what. */
+const AWARDS: { icon: string; title: string; score: (r: DiaryRow) => number }[] = [
+  { icon: '🥕', title: 'Top feeder', score: (r) => r.fed + r.fill },
+  { icon: '🎵', title: 'Most wheeked at', score: (r) => r.wheeks },
+  { icon: '🧺', title: 'Green fingers', score: (r) => r.harvest + r.plant + r.apples },
+  { icon: '🩺', title: 'Vet of the farm', score: (r) => r.fix },
+  { icon: '🦸', title: 'Pig saver', score: (r) => r.save * 3 + r.shoo },
+  { icon: '🤗', title: 'Cuddle champion', score: (r) => r.cuddle },
+]
+const DIARY_COLS: { icon: string; title: string; stat: Stat }[] = [
+  { icon: '🥕', title: 'Veg thrown', stat: 'fed' },
+  { icon: '🎵', title: 'Wheeks (pigs who came running)', stat: 'wheeks' },
+  { icon: '🧺', title: 'Veg harvested', stat: 'harvest' },
+  { icon: '🩺', title: 'Health fixes', stat: 'fix' },
+  { icon: '🦸', title: 'Pigs rescued', stat: 'save' },
+  { icon: '🤗', title: 'Cuddles', stat: 'cuddle' },
+]
 
 /** What a pig is up to, in words, for the hover label. */
 export function mood(p: PigSnap): string {
@@ -39,6 +81,9 @@ export function mood(p: PigSnap): string {
 export class Hud {
   private readonly check = $('check')
   private checkPig: number | null = null
+  private renaming = false
+  private jobsKey = ''
+  private todayKey = ''
   private checked = new Map<Check, number>() // when each check finishes
   private lastAlert = new Map<string, number>()
 
@@ -68,10 +113,76 @@ export class Hud {
       `<span title="How happy the farm is" class="hearts">${hearts} ${happy}%</span>`
   }
 
-  setFarmers(farmers: FarmerSnap[], me: number) {
+  setFarmers(farmers: FarmerSnap[], me: number, looks: PigLook[]) {
+    const adopted = (name: string) => looks.filter((l) => l.adopter === name).length
     $('farmers').innerHTML = farmers
-      .map((f) => `<div style="color:${css(FARMER_COLORS[f.color])}">${f.id === me ? '▶ ' : ''}${esc(f.name)}</div>`)
+      .map((f) => {
+        const n = adopted(f.name)
+        return `<div style="color:${css(FARMER_COLORS[f.color])}">${f.id === me ? '▶ ' : ''}${esc(f.name)}${n ? ` <small title="Adopted piggies">⭐${n}</small>` : ''}</div>`
+      })
       .join('')
+  }
+
+  /** Treat of the day and the countdown to the pig show, under the clock. */
+  setToday(craving: Veg, showIn: number, rain: boolean, zoom: number) {
+    const key = `${craving}|${showIn}|${rain}|${zoom}`
+    if (key === this.todayKey) return
+    this.todayKey = key
+    const show = showIn === 0 ? 'tonight!' : `in ${showIn} day${showIn > 1 ? 's' : ''}`
+    $('today').innerHTML =
+      `<span title="Treat of the day: they love it extra">🤤 Craving ${VEG_ICON[craving]}</span>` +
+      `<span title="Best-kept piggy wins a rosette and a prize">🏆 Pig show ${show}</span>` +
+      `<span class="zoom" title="Zoomometer: fills while the piggies are 70%+ happy. Full = ZOOMIES!">🎉 <i><b style="width:${Math.round(zoom * 100)}%"></b></i></span>` +
+      (rain ? '<span>🌧️ Raining</span>' : '')
+  }
+
+  setJobs(jobs: JobSnap[]) {
+    const key = jobs.map((j) => `${j.kind}${j.n}`).join()
+    if (key === this.jobsKey) return
+    this.jobsKey = key
+    $('jobs').innerHTML =
+      '<h4>📋 Today’s jobs</h4>' +
+      jobs
+        .map((j) => {
+          const done = j.n >= j.goal
+          return `<div class="${done ? 'done' : ''}">${done ? '✅' : '⬜'} ${esc(j.text)} <small>${done ? '' : `${j.n}/${j.goal}`}</small></div>`
+        })
+        .join('')
+  }
+
+  // ---------------------------------------------------------------- farm diary
+
+  get diaryOpen() {
+    return !$('diary').hidden
+  }
+
+  toggleDiary(open = !this.diaryOpen) {
+    $('diary').hidden = !open
+    if (open) $('diary').innerHTML = '<h3>Farm diary</h3><p class="hint">Opening the diary…</p>'
+  }
+
+  showDiary(rows: DiaryRow[], myName: string) {
+    if (!this.diaryOpen) return
+    const total = (r: DiaryRow) => AWARDS.reduce((a, w) => a + w.score(r), 0)
+    const sorted = [...rows].sort((a, b) => total(b) - total(a))
+    const awards = AWARDS.map((w) => {
+      const top = sorted.reduce<DiaryRow | null>((best, r) => (w.score(r) > (best ? w.score(best) : 0) ? r : best), null)
+      return top ? `<li>${w.icon} <b>${w.title}:</b> ${esc(top.name)} <small>(${w.score(top)})</small></li>` : ''
+    }).join('')
+    $('diary').innerHTML = `
+      <h3>Farm diary</h3>
+      ${awards ? `<ul class="awards">${awards}</ul>` : '<p class="hint">Nothing written yet: go and feed some piggies!</p>'}
+      ${
+        sorted.length
+          ? `<table><tr><th></th>${DIARY_COLS.map((c) => `<th title="${c.title}">${c.icon}</th>`).join('')}</tr>${sorted
+              .map(
+                (r) =>
+                  `<tr class="${r.name === myName ? 'me' : ''}"><td>${esc(r.name)}</td>${DIARY_COLS.map((c) => `<td>${r[c.stat]}</td>`).join('')}</tr>`,
+              )
+              .join('')}</table>`
+          : ''
+      }
+      <p class="hint">Everyone who’s ever farmed here, all time. <kbd>L</kbd> to close</p>`
   }
 
   alert(kind: AlertKind, text: string) {
@@ -126,24 +237,61 @@ export class Hud {
   }
 
   /** Redraws the shop if it's open and something changed. */
-  updateShop(coins: number, owned: UpgradeId[], buy: (id: UpgradeId) => void) {
+  private shopTab: ShopTab = 'land'
+
+  /** Redraws the shop if it's open and something changed: tabs for land and each kind of upgrade. */
+  updateShop(coins: number, owned: UpgradeId[], land: SquareId[], buy: { upgrade(id: UpgradeId): void; land(id: SquareId): void }) {
     const el = $('shop')
-    const key = `${coins}|${owned.join()}`
+    const key = `${coins}|${owned.join()}|${land.join()}|${this.shopTab}`
     if (el.hidden || key === this.shopKey) return
     this.shopKey = key
+    const tabs = (Object.keys(SHOP_TABS) as ShopTab[])
+      .map((t) => `<button class="tab ${t === this.shopTab ? 'on' : ''}" data-tab="${t}">${SHOP_TABS[t]}</button>`)
+      .join('')
+    let body: string
+    if (this.shopTab === 'land') {
+      // A little map of the farm: what it has, what it can buy next, what's further off.
+      body = `<div class="landmap">${SQUARES.map((sq) => {
+        const info = LAND[sq.id]
+        const mine = land.includes(sq.id)
+        const next = canBuy(sq.id, land)
+        const action = mine
+          ? '<span class="owned">✓ Yours</span>'
+          : next
+            ? `<button data-land="${sq.id}" ${coins < info.cost ? 'disabled' : ''}>🪙 ${info.cost}</button>`
+            : '<small>🔒 buy next door first</small>'
+        return `<div class="sq ${mine ? 'mine' : next ? 'next' : 'far'}" title="${esc(info.desc)}"><span class="icon">${info.icon}</span><b>${info.name}</b><small>${mine ? '' : info.desc}</small>${action}</div>`
+      }).join('')}</div>`
+    } else {
+      const ids = UPGRADE_IDS.filter((id) => UPGRADES[id].tab === this.shopTab)
+      body = `<table>${ids
+        .map((id) => {
+          const u = UPGRADES[id]
+          const have = owned.includes(id)
+          const missing = u.needs && !land.includes(u.needs) ? u.needs : null
+          const button = have
+            ? '<span class="owned">✓ Got it</span>'
+            : missing
+              ? `<small>needs ${LAND[missing].icon} ${LAND[missing].name}</small>`
+              : `<button data-buy="${id}" ${coins < u.cost ? 'disabled' : ''}>🪙 ${u.cost}</button>`
+          return `<tr class="${have ? 'have' : ''}"><td class="icon">${u.icon}</td><td><b>${u.name}</b><br><small>${u.desc}</small></td><td>${button}</td></tr>`
+        })
+        .join('')}</table>`
+    }
     el.innerHTML = `
       <h3>Farm shop</h3>
       <p class="wallet">🪙 <b>${coins}</b> in the farm wallet. Everyone shares it: spend it wisely!</p>
-      <table>${UPGRADE_IDS.map((id) => {
-        const u = UPGRADES[id]
-        const have = owned.includes(id)
-        const button = have
-          ? '<span class="owned">✓ Got it</span>'
-          : `<button data-buy="${id}" ${coins < u.cost ? 'disabled' : ''}>🪙 ${u.cost}</button>`
-        return `<tr class="${have ? 'have' : ''}"><td class="icon">${u.icon}</td><td><b>${u.name}</b><br><small>${u.desc}</small></td><td>${button}</td></tr>`
-      }).join('')}</table>
+      <div class="tabs">${tabs}</div>
+      ${body}
       <p class="hint">Earn coins each morning for happy, well-fed piggies. <kbd>B</kbd> to close</p>`
-    el.querySelectorAll<HTMLButtonElement>('button[data-buy]').forEach((b) => b.addEventListener('click', () => buy(b.dataset.buy as UpgradeId)))
+    el.querySelectorAll<HTMLButtonElement>('button[data-tab]').forEach((b) =>
+      b.addEventListener('click', () => {
+        this.shopTab = b.dataset.tab as ShopTab
+        this.shopKey = ''
+      }),
+    )
+    el.querySelectorAll<HTMLButtonElement>('button[data-buy]').forEach((b) => b.addEventListener('click', () => buy.upgrade(b.dataset.buy as UpgradeId)))
+    el.querySelectorAll<HTMLButtonElement>('button[data-land]').forEach((b) => b.addEventListener('click', () => buy.land(b.dataset.land as SquareId)))
   }
 
   // ---------------------------------------------------------------- end of day
@@ -227,26 +375,52 @@ export class Hud {
   // ---------------------------------------------------------------- health check card
 
   /** Shows (or hides, with null) the health-check card for the pig in your arms. */
-  showCheck(look: PigLook | null, snap: PigSnap | null, act: CheckActions) {
+  showCheck(look: PigLook | null, snap: PigSnap | null, act: CheckActions, extra: CheckExtra) {
     if (!look || !snap) {
       this.check.hidden = true
       this.checkPig = null
+      this.renaming = false
       return
     }
     if (this.checkPig !== look.id) {
       this.checkPig = look.id
       this.checked.clear()
+      this.renaming = false
       this.buildCheck(look, act)
     }
     this.check.hidden = false
-    this.updateCheck(look, snap)
+    this.updateCheck(look, snap, extra)
+  }
+
+  /** Swaps the pig's name for a text box. Enter saves, Escape doesn't. */
+  private startRename(look: PigLook, act: CheckActions) {
+    if (this.renaming) return
+    this.renaming = true
+    const h = this.check.querySelector('h3')!
+    h.innerHTML = `<input id="ck-name" maxlength="16" value="${esc(look.name)}" autocomplete="off">`
+    const input = h.querySelector('input')!
+    input.focus()
+    input.select()
+    const done = (save: boolean) => {
+      if (!this.renaming) return
+      this.renaming = false
+      const name = input.value.trim()
+      if (save && name && name !== look.name) act.rename(name)
+      h.textContent = look.name
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') done(true)
+      if (e.key === 'Escape') done(false)
+    })
+    input.addEventListener('blur', () => done(true))
   }
 
   private buildCheck(look: PigLook, act: CheckActions) {
     const sex = look.sex === 'sow' ? '♀ sow' : '♂ boar'
     this.check.innerHTML = `
       <h3>${esc(look.name)}</h3>
-      <p class="who">${BREED_NAMES[look.breed]} · ${sex} · ${look.age} yr${look.age > 1 ? 's' : ''} old</p>
+      <p class="who">${BREED_NAMES[look.breed]} · ${sex} · ${look.age ? `${look.age} yr${look.age > 1 ? 's' : ''} old` : 'a baby!'}</p>
+      <p class="family" id="ck-family"></p>
       <div class="bar"><label>Tummy</label><i><b id="ck-hunger"></b></i></div>
       <div class="bar"><label>Happy</label><i><b id="ck-happy"></b></i></div>
       <h4>Health check</h4>
@@ -257,6 +431,10 @@ export class Hud {
         <button id="ck-all">🩺 Check everything</button>
         <button id="ck-cuddle">🤗 Cuddle</button>
         <button id="ck-down">⬇️ Put down <kbd>E</kbd></button>
+      </div>
+      <div class="buttons">
+        <button id="ck-adopt">⭐ Adopt</button>
+        <button id="ck-rename">✏️ Rename</button>
       </div>`
     const start = (id: Check, delay = 0) => {
       if (!this.checked.has(id)) this.checked.set(id, performance.now() + delay + CHECK_MS)
@@ -264,6 +442,9 @@ export class Hud {
     this.check.querySelector('#ck-all')!.addEventListener('click', () => CHECKS.forEach((c, i) => start(c.id, i * 350)))
     this.check.querySelector('#ck-cuddle')!.addEventListener('click', () => act.cuddle())
     this.check.querySelector('#ck-down')!.addEventListener('click', () => act.putDown())
+    this.check.querySelector('#ck-adopt')!.addEventListener('click', () => act.adopt())
+    this.check.querySelector('#ck-rename')!.addEventListener('click', () => this.startRename(look, act))
+    this.check.querySelector('h3')!.addEventListener('dblclick', () => this.startRename(look, act))
     this.check.querySelectorAll('tr').forEach((row) => {
       const id = row.dataset.check as Check
       row.querySelector('.act')!.addEventListener('click', (e) => {
@@ -275,7 +456,14 @@ export class Hud {
     })
   }
 
-  private updateCheck(look: PigLook, p: PigSnap) {
+  private updateCheck(look: PigLook, p: PigSnap, extra: CheckExtra) {
+    const h = this.check.querySelector('h3')!
+    if (!this.renaming && h.textContent !== look.name) h.textContent = look.name
+    const adopt = look.adopter === extra.myName ? '⭐ Yours! (let go)' : look.adopter ? `⭐ Adopt (${look.adopter}’s now)` : '⭐ Adopt'
+    const ab = this.check.querySelector('#ck-adopt')!
+    if (ab.textContent !== adopt) ab.textContent = adopt
+    const fam = this.check.querySelector('#ck-family')!
+    if (fam.innerHTML !== extra.family) fam.innerHTML = extra.family
     const set = (id: string, v: number) => {
       const b = this.check.querySelector<HTMLElement>(`#${id}`)!
       b.style.width = `${v}%`

@@ -9,21 +9,31 @@ import {
   BOUNDS,
   BOWLS,
   DOOR_HALF,
-  GARDEN_FENCE,
+  FENCE_EDGES,
+  GARDENS,
   HAY_BALES,
+  HAY_H,
   HIDEYS,
   HIDEY_D,
+  HIDEY_H,
   HIDEY_W,
   PIG_HOUSES,
   COMPOST,
   FEED_BIN,
   HOPPERS,
+  POND,
+  SALAD_SPOT,
+  SALAD_TABLE,
   SCARECROW,
+  SQUARES,
   TREES,
+  canBuy,
+  center,
+  squareAt,
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BOWL_MAX, NIGHT_START, type UpgradeId, type Veg } from '../core/rules.ts'
+import { BOWL_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 
 const WALL_H = 2.6
@@ -236,6 +246,7 @@ interface Lerp {
   lamps: number
 }
 /** Key moments of the day: time (0 = dawn) → lighting. */
+const RAIN_SKY = new THREE.Color(0x7d8794)
 const KEYS: [number, Lerp][] = [
   [0, { sky: new THREE.Color(0xf6b38a), sun: new THREE.Color(0xffc79a), sunI: 1.2, hemiI: 1.4, lamps: 0.6 }],
   [0.08, { sky: new THREE.Color(0x9fd3ff), sun: new THREE.Color(0xfff4e0), sunI: 2.4, hemiI: 1.8, lamps: 0 }],
@@ -267,6 +278,33 @@ export class World {
   private readonly hoppers: { root: THREE.Group; body: THREE.Group; fill: THREE.Mesh; tray: THREE.Mesh }[] = []
   /** Things that appear when an upgrade is bought. */
   private readonly extras: Partial<Record<UpgradeId, THREE.Object3D>> = {}
+  /** Each square's things (shown once it's bought), and its long grass and for-sale sign (until then). */
+  private readonly content = {} as Record<SquareId, THREE.Group>
+  private readonly wild = {} as Record<SquareId, THREE.Group>
+  private readonly saleSigns = {} as Partial<Record<SquareId, THREE.Mesh>>
+  private land: SquareId[] = []
+  private owned: UpgradeId[] = []
+  /** Sprinklers, one group per square, so they only show on land the farm has. */
+  private readonly sprinklers = {} as Record<SquareId, THREE.Group>
+  /** The farm fence (and the wire along it, an upgrade): rebuilt when the farm grows. */
+  private readonly fence = new THREE.Group()
+  private readonly wire = new THREE.Group()
+  private readonly ducks: THREE.Group[] = []
+  /** The salad being made on the station's platter, and the one served on the barn floor. */
+  private readonly saladMaking = new THREE.Group()
+  private readonly saladServed = new THREE.Group()
+  private saladKey = ''
+  private saladFloor: THREE.Group | null = null
+  private clock = 0
+  /** The two leaves of the low gate in the barn doorway, hinged at each side. */
+  private readonly gate: THREE.Group[] = []
+  private gateShut = false
+  private gateAngle = 0
+  /** Rain: 0 = dry, 1 = pouring (eases in and out). */
+  private rainOn = false
+  private rainK = 0
+  private readonly rain: THREE.LineSegments
+  private readonly puddles: THREE.Mesh[] = []
 
   constructor() {
     const s = this.scene
@@ -288,31 +326,44 @@ export class World {
     this.sun.shadow.bias = -0.0008
     s.add(this.sun, this.sun.target)
 
-    // Ground: lawn everywhere, a dirt path from the barn door to the gate.
+    // Ground: lawn everywhere, a dirt path out of the barn door into the yard.
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ map: grassTex }))
     ground.rotation.x = -Math.PI / 2
     ground.receiveShadow = true
     s.add(ground)
-    const path = new THREE.Mesh(new THREE.PlaneGeometry(3, BOUNDS.z1 + 10), new THREE.MeshLambertMaterial({ map: dirtTex }))
-    ;(path.material.map as THREE.Texture).repeat.set(1, 12)
+    const path = new THREE.Mesh(new THREE.PlaneGeometry(3, 9), new THREE.MeshLambertMaterial({ map: dirtTex }))
+    ;(path.material.map as THREE.Texture).repeat.set(1, 4)
     path.rotation.x = -Math.PI / 2
-    path.position.set(0, 0.01, (BOUNDS.z1 - 10) / 2 + 2)
+    path.position.set(0, 0.01, -5)
     path.receiveShadow = true
     s.add(path)
 
-    this.buildFence()
+    for (const sq of SQUARES) {
+      this.content[sq.id] = new THREE.Group()
+      this.wild[sq.id] = this.buildWild(sq)
+      this.sprinklers[sq.id] = new THREE.Group()
+      s.add(this.content[sq.id], this.wild[sq.id], this.sprinklers[sq.id])
+    }
+    s.add(this.fence, this.wire)
     this.buildBarn()
+    this.buildGate()
     this.buildGarden()
     this.buildOrchard()
-    for (const h of HIDEYS) s.add(this.hidey(h.x, h.z))
+    for (const h of HIDEYS) this.into(h).add(this.hidey(h.x, h.z))
     const hay = new THREE.MeshLambertMaterial({ map: hayTex })
     for (const b of HAY_BALES) {
       // Stacked two high
-      for (let y = 0; y < 2; y++) s.add(boxMesh({ x0: b.x0 + y * 0.1, x1: b.x1 - y * 0.1, z0: b.z0 + y * 0.1, z1: b.z1 - y * 0.1 }, y * 0.7, 0.7, hay))
+      for (let y = 0; y < 2; y++)
+        this.into(center(b)).add(boxMesh({ x0: b.x0 + y * 0.1, x1: b.x1 - y * 0.1, z0: b.z0 + y * 0.1, z1: b.z1 - y * 0.1 }, (y * HAY_H) / 2, HAY_H / 2, hay))
     }
+    this.buildMeadow()
+    this.buildPond()
+    this.buildFlowers()
     this.buildSurroundings()
     this.buildPellets()
+    this.buildSaladStation()
     this.buildExtras()
+    this.rain = this.buildRain()
 
     this.lampBulbs = new THREE.MeshBasicMaterial({ color: 0xffe6a0 })
     for (const x of [-6, 6]) {
@@ -334,55 +385,145 @@ export class World {
     s.add(bulb)
   }
 
+  /** The group for whatever square a point is in (shown only while the farm owns it). */
+  private into(p: { x: number; z: number }): THREE.Group {
+    return this.content[squareAt(p)?.id ?? 'yard']
+  }
+
+  /** The farm fence round the land the farm owns (not along the barn's back wall), and the wire along it. */
   private buildFence() {
-    const posts: THREE.Vector3[] = []
-    const rails: { a: THREE.Vector3; b: THREE.Vector3 }[] = []
-    const { x0, x1, z0, z1 } = { x0: BOUNDS.x0 - 0.2, x1: BOUNDS.x1 + 0.2, z0: BOUNDS.z0 - 0.2, z1: BOUNDS.z1 + 0.2 }
-    const side = (ax: number, az: number, bx: number, bz: number, gap?: [number, number]) => {
-      const len = Math.hypot(bx - ax, bz - az)
-      const n = Math.ceil(len / 2.5)
-      for (let i = 0; i <= n; i++) {
-        const t = i / n
-        const x = ax + (bx - ax) * t
-        const z = az + (bz - az) * t
-        if (gap && x > gap[0] && x < gap[1]) continue
-        posts.push(new THREE.Vector3(x, 0, z))
+    for (const g of [this.fence, this.wire]) {
+      for (const c of [...g.children]) {
+        g.remove(c)
+        if (c instanceof THREE.Mesh) c.geometry.dispose()
       }
-      if (gap) {
-        rails.push({ a: new THREE.Vector3(ax, 0, az), b: new THREE.Vector3(gap[0], 0, bz) })
-        rails.push({ a: new THREE.Vector3(gap[1], 0, az), b: new THREE.Vector3(bx, 0, bz) })
-      } else rails.push({ a: new THREE.Vector3(ax, 0, az), b: new THREE.Vector3(bx, 0, bz) })
     }
-    side(x0, z1, x1, z1, [-1.6, 1.6]) // south, with the gate
-    side(x0, z0, x0, z1)
-    side(x1, z0, x1, z1)
-    side(x0, z0, BARN_OUTER.x0, z0)
-    side(BARN_OUTER.x1, z0, x1, z0)
     const wood = mat(0x8a5a2b)
     const postGeo = new THREE.BoxGeometry(0.18, 1.2, 0.18)
+    const posts: THREE.Vector3[] = []
+    const wireMat = new THREE.MeshLambertMaterial({ map: wireTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
+    for (const e of FENCE_EDGES) {
+      if (e.barn) continue
+      const len = Math.hypot(e.b.x - e.a.x, e.b.z - e.a.z)
+      const n = Math.ceil(len / 2.5)
+      for (let i = 0; i <= n; i++) posts.push(new THREE.Vector3(e.a.x + ((e.b.x - e.a.x) * i) / n, 0.6, e.a.z + ((e.b.z - e.a.z) * i) / n))
+      const angle = -Math.atan2(e.b.z - e.a.z, e.b.x - e.a.x)
+      for (const y of [0.45, 0.95]) {
+        const rail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(len, 0.1, 0.06), wood))
+        rail.position.set((e.a.x + e.b.x) / 2, y, (e.a.z + e.b.z) / 2)
+        rail.rotation.y = angle
+        this.fence.add(rail)
+      }
+      const m = wireMat.clone()
+      m.map = wireTex.clone()
+      m.map.needsUpdate = true
+      m.map.repeat.set(len, 1)
+      const w = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.7), m)
+      w.position.set((e.a.x + e.b.x) / 2 + e.out.x * 0.1, 0.35, (e.a.z + e.b.z) / 2 + e.out.z * 0.1)
+      w.rotation.y = angle
+      this.wire.add(w)
+    }
     const inst = new THREE.InstancedMesh(postGeo, wood, posts.length)
     const m4 = new THREE.Matrix4()
-    posts.forEach((p, i) => inst.setMatrixAt(i, m4.makeTranslation(p.x, 0.6, p.z)))
+    posts.forEach((p, i) => inst.setMatrixAt(i, m4.makeTranslation(p.x, p.y, p.z)))
     inst.castShadow = true
-    this.scene.add(inst)
-    for (const { a, b } of rails) {
-      for (const y of [0.45, 0.95]) {
-        const len = a.distanceTo(b)
-        const rail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(len, 0.1, 0.06), wood))
-        rail.position.set((a.x + b.x) / 2, y, (a.z + b.z) / 2)
-        rail.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x)
-        this.scene.add(rail)
+    this.fence.add(inst)
+  }
+
+  /** Land the farm hasn't bought: long grass and wild bits. Its sign goes up in setLand. */
+  private buildWild(sq: (typeof SQUARES)[number]) {
+    const g = new THREE.Group()
+    const w = sq.x1 - sq.x0
+    const d = sq.z1 - sq.z0
+    const rough = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ map: grassTex, color: 0xc8c890 }))
+    rough.rotation.x = -Math.PI / 2
+    rough.position.set((sq.x0 + sq.x1) / 2, 0.012, (sq.z0 + sq.z1) / 2)
+    rough.receiveShadow = true
+    g.add(rough)
+    let seed = sq.col * 7 + sq.row * 13 + 1
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+    const n = 90
+    const tufts = new THREE.InstancedMesh(new THREE.ConeGeometry(0.25, 0.9, 5), mat(0x7a9a3e), n)
+    const m4 = new THREE.Matrix4()
+    for (let i = 0; i < n; i++) {
+      const s = 0.6 + rnd() * 0.8
+      m4.compose(
+        new THREE.Vector3(sq.x0 + 0.5 + rnd() * (w - 1), 0.4 * s, sq.z0 + 0.5 + rnd() * (d - 1)),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler((rnd() - 0.5) * 0.4, rnd() * 3, (rnd() - 0.5) * 0.4)),
+        new THREE.Vector3(s, s, s),
+      )
+      tufts.setMatrixAt(i, m4)
+    }
+    g.add(tufts)
+    return g
+  }
+
+  /** The hay meadow: lusher, darker grass. */
+  private buildMeadow() {
+    const sq = SQUARES.find((x) => x.id === 'meadow')!
+    const lush = new THREE.Mesh(new THREE.PlaneGeometry(sq.x1 - sq.x0, sq.z1 - sq.z0), new THREE.MeshLambertMaterial({ map: grassTex, color: 0x9fd87a }))
+    lush.rotation.x = -Math.PI / 2
+    lush.position.set((sq.x0 + sq.x1) / 2, 0.012, (sq.z0 + sq.z1) / 2)
+    lush.receiveShadow = true
+    this.content.meadow.add(lush)
+  }
+
+  /** The pond: water, stones round the edge, and a couple of ducks paddling about. */
+  private buildPond() {
+    const c = center(POND)
+    const rx = (POND.x1 - POND.x0) / 2
+    const rz = (POND.z1 - POND.z0) / 2
+    const water = new THREE.Mesh(new THREE.CircleGeometry(1, 32), new THREE.MeshLambertMaterial({ color: 0x4f9fd8 }))
+    water.rotation.x = -Math.PI / 2
+    water.scale.set(rx + 0.3, rz + 0.3, 1)
+    water.position.set(c.x, 0.03, c.z)
+    this.content.pond.add(water)
+    const stone = mat(0x9a9a92)
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2
+      const b = shadowed(new THREE.Mesh(new THREE.IcosahedronGeometry(0.35 + (i % 3) * 0.1, 0), stone))
+      b.position.set(c.x + Math.cos(a) * (rx + 0.5), 0.12, c.z + Math.sin(a) * (rz + 0.5))
+      b.scale.y = 0.6
+      this.content.pond.add(b)
+    }
+    for (let i = 0; i < 2; i++) {
+      const duck = new THREE.Group()
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), mat(i ? 0xf6f1e7 : 0x8a6a3c))
+      body.scale.set(1, 0.7, 1.4)
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), mat(i ? 0xf6f1e7 : 0x2f7a2a))
+      head.position.set(0, 0.25, -0.3)
+      const beak = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.18, 6), mat(0xf28a30))
+      beak.rotation.x = -Math.PI / 2
+      beak.position.set(0, 0.23, -0.47)
+      duck.add(body, head, beak)
+      duck.position.set(c.x, 0.12, c.z)
+      this.content.pond.add(duck)
+      this.ducks.push(duck)
+    }
+  }
+
+  /** Wild flowers: daisies, buttercups and clover all over their square. */
+  private buildFlowers() {
+    const sq = SQUARES.find((x) => x.id === 'flowers')!
+    let seed = 99
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+    const head = new THREE.CircleGeometry(0.13, 8)
+    head.rotateX(-Math.PI / 2)
+    const m4 = new THREE.Matrix4()
+    for (const color of [0xffe14a, 0xf6f1e7, 0xff9ad6, 0xb98af0]) {
+      const n = 110
+      const inst = new THREE.InstancedMesh(head, new THREE.MeshLambertMaterial({ color }), n)
+      for (let i = 0; i < n; i++) {
+        const s = 0.7 + rnd() * 0.8
+        m4.compose(
+          new THREE.Vector3(sq.x0 + 0.5 + rnd() * (sq.x1 - sq.x0 - 1), 0.05 + rnd() * 0.12, sq.z0 + 0.5 + rnd() * (sq.z1 - sq.z0 - 1)),
+          new THREE.Quaternion(),
+          new THREE.Vector3(s, 1, s),
+        )
+        inst.setMatrixAt(i, m4)
       }
+      this.content.flowers.add(inst)
     }
-    // Gate posts with a sign
-    for (const x of [-1.6, 1.6]) {
-      const p = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.4, 0.3), wood))
-      p.position.set(x, 1.2, z1)
-      this.scene.add(p)
-    }
-    const sign = this.sign('Guinea Orchard', 3.6, 0.7)
-    sign.position.set(0, 2.5, z1)
-    this.scene.add(sign)
   }
 
   private sign(text: string, w: number, h: number) {
@@ -522,7 +663,7 @@ export class World {
   private hidey(x: number, z: number) {
     const g = new THREE.Group()
     const wood = new THREE.MeshLambertMaterial({ map: plankTex })
-    const h = 1.1
+    const h = HIDEY_H
     const half = HIDEY_W / 2
     const slope = Math.hypot(half, h)
     for (const side of [-1, 1]) {
@@ -548,17 +689,17 @@ export class World {
   }
 
   private buildGarden() {
-    const s = this.scene
     const picket = mat(0xf6efe0)
-    for (const f of GARDEN_FENCE) s.add(boxMesh(f, 0, 0.75, picket))
+    for (const g of GARDENS) for (const f of g.fence) this.content[g.square].add(boxMesh(f, 0, 0.75, picket))
     const frame = new THREE.MeshLambertMaterial({ map: plankTex })
     const soil = new THREE.MeshLambertMaterial({ map: soilTex })
     const leafy = mat(0x4caf3a)
     const leafGeo = new THREE.SphereGeometry(1, 7, 5)
     for (const bed of BEDS) {
+      const group = this.content[bed.square]
       const box = shadowed(new THREE.Mesh(new THREE.BoxGeometry(BED_W, 0.3, BED_D), [frame, frame, soil, frame, frame, frame]))
       box.position.set(bed.x, 0.15, bed.z)
-      s.add(box)
+      group.add(box)
       const view: BedView = { plants: [], ripe: [] }
       for (let i = 0; i < 8; i++) {
         const px = bed.x + (i % 2 ? 0.55 : -0.55)
@@ -576,22 +717,22 @@ export class World {
         const ripe = new THREE.Group()
         ripe.add(veg)
         plant.add(ripe)
-        s.add(plant)
+        group.add(plant)
         view.plants.push(plant)
         view.ripe.push(ripe)
       }
       this.beds.push(view)
     }
+
   }
 
   private buildOrchard() {
-    const s = this.scene
     const trunkMat = mat(0x7a5232)
     const leaves = [mat(0x4c9a3a), mat(0x5aae44), mat(0x3f8a32)]
     const appleMat = mat(0xd8322b)
     const ball = new THREE.IcosahedronGeometry(1, 1)
     const appleGeo = new THREE.SphereGeometry(0.1, 8, 6)
-    for (const t of TREES) s.add(this.tree(t.x, t.z, trunkMat, leaves, ball, appleGeo, appleMat, true))
+    for (const t of TREES) this.content.orchard.add(this.tree(t.x, t.z, trunkMat, leaves, ball, appleGeo, appleMat, true))
   }
 
   private tree(
@@ -666,7 +807,167 @@ export class World {
     }
   }
 
+  /** A low wooden gate across the barn door: two leaves that swing inwards. Open by day. */
+  private buildGate() {
+    const wood = new THREE.MeshLambertMaterial({ map: plankTex })
+    for (const side of [-1, 1]) {
+      const pivot = new THREE.Group()
+      pivot.position.set(side * DOOR_HALF, 0, -10.2)
+      const leaf = new THREE.Group()
+      for (const y of [0.25, 0.65]) {
+        const rail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(DOOR_HALF - 0.05, 0.14, 0.08), wood))
+        rail.position.set((-side * (DOOR_HALF - 0.05)) / 2, y, 0)
+        leaf.add(rail)
+      }
+      for (const x of [0.15, DOOR_HALF / 2, DOOR_HALF - 0.2]) {
+        const post = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.85, 0.1), wood))
+        post.position.set(-side * x, 0.42, 0)
+        leaf.add(post)
+      }
+      pivot.add(leaf)
+      this.scene.add(pivot)
+      this.gate.push(pivot)
+    }
+  }
+
+  /** Rain streaks that fall around the camera, and puddles on the lawn. */
+  private buildRain() {
+    const n = 1400
+    const pos = new Float32Array(n * 6)
+    for (let i = 0; i < n; i++) {
+      const x = (Math.random() - 0.5) * 60
+      const y = Math.random() * 22
+      const z = (Math.random() - 0.5) * 60
+      pos.set([x, y, z, x + 0.04, y + 0.55, z], i * 6)
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    const rain = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xcfe2ff, transparent: true, opacity: 0, depthWrite: false }))
+    rain.frustumCulled = false
+    rain.visible = false
+    this.scene.add(rain)
+    const puddleMat = new THREE.MeshBasicMaterial({ color: 0x6f8fb0, transparent: true, opacity: 0, depthWrite: false })
+    const spots = [
+      [-4, 4, 1.6], [3, 14, 1.2], [-10, 9, 1.0], [8, 6, 1.4], [2, -4, 1.1], [-6, 20, 1.3], [14, 20, 1.0], [20, -9, 1.2], [-3, -7.5, 0.9],
+    ]
+    for (const [x, z, r] of spots) {
+      const p = new THREE.Mesh(new THREE.CircleGeometry(r, 20), puddleMat)
+      p.rotation.x = -Math.PI / 2
+      p.scale.set(1, 0.7, 1)
+      p.position.set(x, 0.025, z)
+      p.visible = false
+      this.scene.add(p)
+      this.puddles.push(p)
+    }
+    return rain
+  }
+
+  /** A prep table by the door with a big platter on it, and a platter for the barn floor once it's served. */
+  private buildSaladStation() {
+    const wood = new THREE.MeshLambertMaterial({ map: plankTex })
+    const table = new THREE.Group()
+    table.position.set(SALAD_TABLE.x, 0, SALAD_TABLE.z)
+    const top = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 0.9), wood))
+    top.position.y = 0.75
+    table.add(top)
+    for (const [x, z] of [
+      [-0.8, -0.35],
+      [0.8, -0.35],
+      [-0.8, 0.35],
+      [0.8, 0.35],
+    ])
+      table.add(shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.75, 0.08), wood)).translateX(x).translateY(0.375).translateZ(z))
+    const plate = (r: number) => shadowed(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, 0.06, 24), mat(0xf6f1e7)))
+    const p1 = plate(0.55)
+    p1.position.y = 0.83
+    table.add(p1)
+    this.saladMaking.position.y = 0.86
+    table.add(this.saladMaking)
+    const sign = this.sign('🥗 Salad station', 1.8, 0.4)
+    sign.position.set(0, 1.35, 0.1)
+    table.add(sign)
+    this.scene.add(table)
+
+    const floor = new THREE.Group()
+    floor.position.set(SALAD_SPOT.x, 0, SALAD_SPOT.z)
+    floor.add(plate(1.1).translateY(0.04))
+    this.saladServed.position.y = 0.08
+    floor.add(this.saladServed)
+    this.scene.add(floor)
+    this.saladFloor = floor
+  }
+
+  /** Fills the platters: veg being made up on the station, and what's left of tonight's on the floor. */
+  setSalad(veg: number[], bites: number) {
+    const key = `${veg.join()}|${bites}`
+    if (key === this.saladKey) return
+    this.saladKey = key
+    const pile = (g: THREE.Group, kinds: Veg[], n: number, radius: number, scale: number) => {
+      for (const c of [...g.children]) g.remove(c)
+      for (let i = 0; i < n; i++) {
+        const v = makeVeg(kinds[i % kinds.length])
+        const a = i * 2.4
+        const r = radius * Math.sqrt((i + 0.5) / n)
+        v.position.set(Math.cos(a) * r, Math.floor(i / 7) * 0.05, Math.sin(a) * r)
+        v.rotation.y = a
+        v.scale.setScalar(scale)
+        g.add(v)
+      }
+    }
+    const making = VEGGIES.filter((_, i) => veg[i] > 0)
+    const total = veg.reduce((a, b) => a + b, 0)
+    pile(this.saladMaking, making, Math.min(14, total), 0.42, 0.55)
+    pile(this.saladServed, [...VEGGIES], Math.ceil((Math.min(1, bites / (SALAD_MAX * SALAD_BITES)) * 26)), 0.9, 0.8)
+    if (this.saladFloor) this.saladFloor.visible = bites > 0
+  }
+
   // ---------------------------------------------------------------- things that change
+
+  setDoor(shut: boolean) {
+    this.gateShut = shut
+  }
+
+  setRain(on: boolean) {
+    this.rainOn = on
+  }
+
+  /** Per-frame animation: the gate swinging and the rain falling. */
+  update(dt: number, focus: THREE.Vector3) {
+    this.clock += dt
+    const c = center(POND)
+    this.ducks.forEach((d, i) => {
+      const a = this.clock * (0.25 + i * 0.1) + i * 2.5
+      d.position.set(c.x + Math.cos(a) * (2.6 - i), 0.12 + Math.sin(this.clock * 3 + i) * 0.02, c.z + Math.sin(a) * (1.4 - i * 0.4))
+      d.rotation.y = -a + Math.PI
+    })
+    // Open means swung right in against the inside of the wall.
+    const target = this.gateShut ? 0 : Math.PI / 2
+    this.gateAngle += (target - this.gateAngle) * Math.min(1, dt * 6)
+    this.gate.forEach((g, i) => (g.rotation.y = (i === 0 ? 1 : -1) * this.gateAngle))
+
+    this.rainK += ((this.rainOn ? 1 : 0) - this.rainK) * Math.min(1, dt * 0.6)
+    const wet = this.rainK > 0.01
+    this.rain.visible = wet
+    for (const p of this.puddles) {
+      p.visible = wet
+      ;(p.material as THREE.MeshBasicMaterial).opacity = 0.45 * this.rainK
+    }
+    if (!wet) return
+    ;(this.rain.material as THREE.LineBasicMaterial).opacity = 0.55 * this.rainK
+    this.rain.position.set(focus.x, 0, focus.z)
+    const pos = this.rain.geometry.getAttribute('position') as THREE.BufferAttribute
+    const a = pos.array as Float32Array
+    const fall = 20 * dt
+    for (let i = 0; i < a.length; i += 6) {
+      a[i + 1] -= fall
+      a[i + 4] -= fall
+      if (a[i + 1] < 0) {
+        a[i + 1] += 22
+        a[i + 4] += 22
+      }
+    }
+    pos.needsUpdate = true
+  }
 
   setBeds(beds: BedSnap[]) {
     beds.forEach((b, i) => {
@@ -765,10 +1066,10 @@ export class World {
     s.add(crow)
     this.extras.scarecrow = crow
 
-    // Sprinklers in every bed.
-    const sprinklers = new THREE.Group()
+    // Sprinklers in every bed (shown per square, on land the farm has).
     const spray = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.35, depthWrite: false })
     for (const b of BEDS) {
+      const group = this.sprinklers[b.square]
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.7, 6), mat(0x9aa3ad))
       post.position.set(b.x, 0.6, b.z)
       const top = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), mat(0x3c7ee8))
@@ -776,10 +1077,8 @@ export class World {
       const mist = new THREE.Mesh(new THREE.ConeGeometry(1.2, 0.6, 16, 1, true), spray)
       mist.position.set(b.x, 0.75, b.z)
       mist.rotation.x = Math.PI
-      sprinklers.add(post, top, mist)
+      group.add(post, top, mist)
     }
-    s.add(sprinklers)
-    this.extras.sprinkler = sprinklers
 
     // A glowing heater against the back wall of the barn.
     const heater = new THREE.Group()
@@ -810,35 +1109,42 @@ export class World {
     s.add(compost)
     this.extras.compost = compost
 
-    // Wire mesh along the bottom of the fence.
-    const wire = new THREE.Group()
-    const mesh = new THREE.MeshLambertMaterial({ map: wireTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
-    const { x0, x1, z0, z1 } = BOUNDS
-    const run = (ax: number, az: number, bx: number, bz: number) => {
-      const len = Math.hypot(bx - ax, bz - az)
-      const m = mesh.clone()
-      m.map = wireTex.clone()
-      m.map.needsUpdate = true
-      m.map.repeat.set(len / 1, 1)
-      const p = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.7), m)
-      p.position.set((ax + bx) / 2, 0.35, (az + bz) / 2)
-      p.rotation.y = -Math.atan2(bz - az, bx - ax)
-      wire.add(p)
-    }
-    run(x0 - 0.1, z1 + 0.1, -1.6, z1 + 0.1)
-    run(1.6, z1 + 0.1, x1 + 0.1, z1 + 0.1)
-    run(x0 - 0.1, z0 - 0.1, x0 - 0.1, z1 + 0.1)
-    run(x1 + 0.1, z0 - 0.1, x1 + 0.1, z1 + 0.1)
-    run(x0 - 0.1, z0 - 0.1, BARN_OUTER.x0, z0 - 0.1)
-    run(BARN_OUTER.x1, z0 - 0.1, x1 + 0.1, z0 - 0.1)
-    s.add(wire)
-    this.extras.fence = wire
+    this.extras.fence = this.wire
 
     this.setUpgrades([])
   }
 
+  /** The farm grew: show the squares it owns, put for-sale signs on the ones it could buy next, move the fence. */
+  setLand(land: SquareId[]) {
+    if (land.length === this.land.length && land.every((id) => this.land.includes(id))) return
+    this.land = [...land]
+    for (const sq of SQUARES) {
+      const mine = land.includes(sq.id)
+      this.content[sq.id].visible = mine
+      this.wild[sq.id].visible = !mine
+      const old = this.saleSigns[sq.id]
+      if (old) {
+        old.removeFromParent()
+        delete this.saleSigns[sq.id]
+      }
+      if (mine || START_LAND.includes(sq.id)) continue
+      const info = LAND[sq.id]
+      const sign = this.sign(canBuy(sq.id, land) ? `${info.icon} ${info.name}: ${info.cost}🪙 · shop (B)` : `🔒 ${info.icon} ${info.name}`, 5, 0.7)
+      sign.position.set((sq.x0 + sq.x1) / 2, 1.6, (sq.z0 + sq.z1) / 2)
+      const post = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.4, 0.15), mat(0x7a5232)))
+      post.position.y = -0.85
+      sign.add(post)
+      this.wild[sq.id].add(sign)
+      this.saleSigns[sq.id] = sign
+    }
+    this.buildFence()
+    this.setUpgrades(this.owned)
+  }
+
   setUpgrades(owned: UpgradeId[]) {
+    this.owned = [...owned]
     for (const [id, obj] of Object.entries(this.extras)) obj.visible = owned.includes(id as UpgradeId)
+    for (const sq of SQUARES) this.sprinklers[sq.id].visible = owned.includes('sprinkler') && this.land.includes(sq.id)
     // Bigger hoppers are taller.
     for (const h of this.hoppers) h.body.scale.y = owned.includes('bighopper') ? 1.4 : 1
   }
@@ -895,12 +1201,13 @@ export class World {
     const [ta, a] = KEYS[i]
     const [tb, b] = KEYS[i + 1]
     const k = Math.max(0, Math.min(1, (t - ta) / Math.max(1e-6, tb - ta)))
-    const sky = a.sky.clone().lerp(b.sky, k)
+    // Rain greys the sky and dims the sun.
+    const sky = a.sky.clone().lerp(b.sky, k).lerp(RAIN_SKY, this.rainK * 0.6)
     ;(this.scene.background as THREE.Color).copy(sky)
     ;(this.scene.fog as THREE.Fog).color.copy(sky)
     this.sun.color.copy(a.sun).lerp(b.sun, k)
-    this.sun.intensity = a.sunI + (b.sunI - a.sunI) * k
-    this.hemi.intensity = a.hemiI + (b.hemiI - a.hemiI) * k
+    this.sun.intensity = (a.sunI + (b.sunI - a.sunI) * k) * (1 - 0.55 * this.rainK)
+    this.hemi.intensity = (a.hemiI + (b.hemiI - a.hemiI) * k) * (1 - 0.2 * this.rainK)
     const lamps = a.lamps + (b.lamps - a.lamps) * k
     for (const l of this.lamps) l.intensity = lamps * 25
     this.lampBulbs.color.setScalar(0.5 + lamps * 0.5).multiply(new THREE.Color(0xffe6a0))

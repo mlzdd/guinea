@@ -1,0 +1,695 @@
+import { describe, expect, it } from 'vitest'
+import { Farm, SALAD_ID } from '../../src/core/farm.ts'
+import { BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, HAY_BALES, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, center, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { moveFarmer, type Body } from '../../src/core/move.ts'
+import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
+import {
+  CRAVING_HAPPY,
+  DAY_MS,
+  DAY_RAMP,
+  START_TIME,
+  GRAVITY,
+  GROW_MS,
+  HERD_MAX,
+  LAND,
+  LITTER,
+  PAY,
+  PIG_COUNT,
+  PREGNANCY_DAYS,
+  RUN_SPEED,
+  SALAD_BITES,
+  SALAD_FROM,
+  WALK_SPEED,
+  dayLength,
+  farmDays,
+  farmTime,
+  JOB_PAY,
+  JUMP_V,
+  JOBS_PER_DAY,
+  NIGHT_START,
+  PUP_DAYS,
+  RAIN_GROW,
+  SHOW_PRIZE,
+  ZOOMIES_MS,
+  ZOOM_FILL_MS,
+} from '../../src/core/rules.ts'
+import { lonePig, run, seeded, setup, veg } from './helpers.ts'
+
+const sent = (farm: Farm) => farm.out.map((o) => o.msg)
+const alerts = (farm: Farm, kind: string) => sent(farm).filter((m): m is Extract<ServerMsg, { t: 'alert' }> => m.t === 'alert' && m.kind === kind)
+const report = (farm: Farm) => {
+  const r = sent(farm).find((m) => m.t === 'report')
+  if (r?.t !== 'report') throw new Error('no report')
+  return r
+}
+/** Farm time for a given day (1-based) and time of day. */
+const at = (day: number, time: number) => farmTime(day - 1 + time)
+
+describe('treat of the day', () => {
+  it('a bite of the craving cheers a pig up extra, and the day pays for it', () => {
+    const { farm, id, me } = setup()
+    farm.craving = 'pepper'
+    const p = lonePig(farm, 2, 2, 40)
+    p.happy = 50
+    me.basket[veg('pepper')] = 1
+    Object.assign(me, { x: 2, z: 6 })
+    farm.handle(id, { t: 'throw', veg: 'pepper', x: 2, z: 3 })
+    expect(run(farm, 8000, () => p.state === 'eat')).toBe(true)
+    const before = p.happy
+    run(farm, 1200)
+    expect(p.happy - before).toBeGreaterThan(CRAVING_HAPPY - 1)
+
+    farm.out = []
+    farm.payDay()
+    expect(report(farm).lines.find((l) => l.label.includes('craving'))?.coins).toBe(1)
+    // A new day, a new craving.
+    expect(farm.craving).not.toBe('pepper')
+    expect(farm.snapshot().craving).toBe(farm.craving)
+  })
+})
+
+describe('the farm clock', () => {
+  it('the first days are short and get longer, so a new farm gets going quickly', () => {
+    expect(dayLength(1)).toBeLessThan(dayLength(2))
+    expect(dayLength(1)).toBe(DAY_MS / 2)
+    expect(dayLength(DAY_RAMP + 1)).toBe(DAY_MS)
+    expect(dayLength(20)).toBe(DAY_MS)
+    // farmTime and farmDays go back and forth.
+    for (const d of [0.05, 0.5, 1, 2.76, 4.2, 9.9]) expect(farmDays(farmTime(d))).toBeCloseTo(d, 6)
+    const { farm } = setup()
+    expect(farm.day).toBe(1)
+    expect(farm.dayTime).toBeCloseTo(START_TIME)
+    farm.t = farmTime(1) + 1
+    expect(farm.day).toBe(2)
+    // Day 1 is over in half the time a full day takes.
+    expect(farmTime(1) - farmTime(START_TIME)).toBeCloseTo(DAY_MS / 2 * (1 - START_TIME))
+  })
+})
+
+describe('daily jobs', () => {
+  it('a fresh farm has a few different jobs, and a new lot comes each morning', () => {
+    const { farm } = setup()
+    expect(new Set(farm.jobs.map((j) => j.kind)).size).toBe(JOBS_PER_DAY)
+    farm.jobs[0].n = 1
+    farm.payDay()
+    expect(new Set(farm.jobs.map((j) => j.kind)).size).toBe(JOBS_PER_DAY)
+    expect(farm.jobs.every((j) => j.n === 0)).toBe(true)
+  })
+
+  it('jobs pay out as soon as they are done', () => {
+    const { farm, id, me } = setup()
+    farm.jobs = [{ kind: 'plant', goal: 2, n: 0 }]
+    const coins = farm.coins
+    for (const i of [0, 1]) {
+      farm.beds[i].stage = 'empty'
+      Object.assign(me, { x: BEDS[i].x + 2, z: BEDS[i].z })
+      farm.handle(id, { t: 'plant', bed: i })
+    }
+    expect(farm.coins).toBe(coins + JOB_PAY)
+    expect(alerts(farm, 'job')).toHaveLength(1)
+    expect(farm.snapshot().jobs[0]).toMatchObject({ kind: 'plant', n: 2, goal: 2, text: 'Plant 2 beds' })
+    // Done is done: no paying twice.
+    farm.beds[2].stage = 'empty'
+    Object.assign(me, { x: BEDS[2].x + 2, z: BEDS[2].z })
+    farm.handle(id, { t: 'plant', bed: 2 })
+    expect(farm.coins).toBe(coins + JOB_PAY)
+  })
+})
+
+describe('names and favourites', () => {
+  it('rename and adopt the pig you are holding; everyone hears about it; it is saved', () => {
+    const { farm, id, me } = setup()
+    const p = lonePig(farm, 2, 2, 90)
+    farm.handle(id, { t: 'rename', name: 'Nope' })
+    expect(p.name).not.toBe('Nope')
+
+    Object.assign(me, { x: 3, z: 2 })
+    farm.handle(id, { t: 'pickup', pig: 0 })
+    farm.handle(id, { t: 'rename', name: 'Sir Wheeks' })
+    farm.handle(id, { t: 'adopt' })
+    expect(p.name).toBe('Sir Wheeks')
+    expect(p.adopter).toBe('Ann')
+    const looks = sent(farm).filter((m) => m.t === 'pig')
+    expect(looks.at(-1)).toMatchObject({ t: 'pig', look: { id: 0, name: 'Sir Wheeks', adopter: 'Ann' } })
+
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.looks()[0]).toMatchObject({ name: 'Sir Wheeks', adopter: 'Ann' })
+
+    // Adopting again lets them go.
+    farm.handle(id, { t: 'adopt' })
+    expect(p.adopter).toBeUndefined()
+  })
+})
+
+describe('emotes', () => {
+  it('go out to everyone, but not too fast', () => {
+    const { farm, id } = setup()
+    farm.handle(id, { t: 'emote', e: 1 })
+    farm.handle(id, { t: 'emote', e: 2 })
+    expect(sent(farm).filter((m) => m.t === 'emote')).toEqual([{ t: 'emote', by: id, e: 1 }])
+    run(farm, 1000)
+    farm.handle(id, { t: 'emote', e: 2 })
+    expect(sent(farm).filter((m) => m.t === 'emote')).toHaveLength(2)
+  })
+})
+
+describe('jumping', () => {
+  it('anything lower than your feet does not get in the way, and you can stand on huts and hay', () => {
+    setup()
+    expect((JUMP_V * JUMP_V) / (2 * GRAVITY)).toBeGreaterThan(1.4) // high enough for the hay
+    // The garden fence stops you on the ground, but not mid-jump.
+    const walking = { x: -14.8, z: -3 }
+    settleFarmer(walking, 0)
+    expect(walking.x).toBeGreaterThan(-14.6)
+    const jumping = { x: -14.8, z: -3 }
+    settleFarmer(jumping, 1)
+    expect(jumping).toEqual({ x: -14.8, z: -3 })
+    // Barn walls are too tall to jump.
+    const wall = { x: 11.8, z: -18 }
+    settleFarmer(wall, 1.5)
+    expect(wall.x === 11.8).toBe(false)
+    // Huts and hay are somewhere to stand.
+    expect(groundAt(HIDEYS[0])).toBe(HIDEY_H)
+    expect(groundAt({ x: HIDEYS[0].x, z: HIDEYS[0].z + 2 })).toBe(0)
+    expect(groundAt(center(HAY_BALES[1]))).toBe(1.4)
+    // Over the farm fence, but not far.
+    const out = { x: BOUNDS.x1 + 3, z: 0 }
+    settleFarmer(out, 0)
+    expect(out.x).toBe(BOUNDS.x1 + 3)
+    const far = { x: BOUNDS.x1 + 20, z: 0 }
+    settleFarmer(far, 0)
+    expect(far.x).toBeLessThan(BOUNDS.x1 + 6)
+  })
+
+  it('the server takes your height, so you can be up on things', () => {
+    const { farm, id, me } = setup()
+    farm.handle(id, { t: 'state', x: -14.8, y: 0, z: -3, yaw: 0 })
+    expect(me.x).toBeGreaterThan(-14.6)
+    farm.handle(id, { t: 'state', x: -14.8, y: 1, z: -3, yaw: 0 })
+    expect(me.x).toBe(-14.8)
+    expect(farm.snapshot().farmers[0]).toMatchObject({ x: -14.8, y: 1 })
+    // Older clients don't send it; nonsense heights are ignored.
+    expect(parseClientMsg(JSON.stringify({ t: 'state', x: 1, z: 2, yaw: 0 }))).toEqual({ t: 'state', x: 1, y: 0, z: 2, yaw: 0 })
+    expect(parseClientMsg(JSON.stringify({ t: 'state', x: 1, y: 99, z: 2, yaw: 0 }))).toMatchObject({ y: 0 })
+  })
+})
+
+describe('zoomies', () => {
+  const happyHerd = (farm: Farm, happy: number) => {
+    for (const p of farm.pigs) Object.assign(p, { happy, hunger: 100, issues: 0, state: 'idle', until: farm.t + 600_000 })
+  }
+  const zoomies = (farm: Farm) => alerts(farm, 'fun').filter((a) => a.text.includes('ZOOMIES')).length
+
+  it('the zoomometer fills while the herd is happy, then the pigs go wild for a bit', () => {
+    const { farm } = setup()
+    happyHerd(farm, 90)
+    run(farm, ZOOM_FILL_MS / 4)
+    expect(farm.snapshot().zoom).toBeGreaterThan(0.2)
+    expect(zoomies(farm)).toBe(0)
+    expect(run(farm, ZOOM_FILL_MS, () => zoomies(farm) > 0)).toBe(true)
+    expect(farm.zoomMeter).toBe(0)
+    run(farm, 400)
+    expect(farm.pigs.filter((p) => p.state === 'zoom' || p.state === 'popcorn').length).toBeGreaterThan(farm.pigs.length / 2)
+    run(farm, ZOOMIES_MS + 10_000)
+    expect(farm.pigs.filter((p) => p.state === 'zoom')).toHaveLength(0)
+  })
+
+  it('a grumpy herd drains it, and it rests at night', () => {
+    const { farm } = setup()
+    farm.zoomMeter = 0.5
+    happyHerd(farm, 30)
+    run(farm, 10_000)
+    expect(farm.zoomMeter).toBeLessThan(0.5)
+    const meter = farm.zoomMeter
+    farm.t = at(1, NIGHT_START) + 1000
+    happyHerd(farm, 100)
+    run(farm, 10_000)
+    expect(farm.zoomMeter).toBe(meter)
+  })
+})
+
+describe('weather', () => {
+  it('rain sends the pigs into the barn and makes the garden grow faster', () => {
+    const { farm } = setup(4)
+    farm.beds[0].stage = 'growing'
+    farm.beds[0].plantedAt = farm.t
+    farm.beds[0].readyAt = farm.t + GROW_MS
+    farm.rainFrom = farm.t + 100
+    farm.rainTo = farm.t + 120_000
+    run(farm, 500)
+    expect(farm.snapshot().rain).toBe(true)
+    expect(alerts(farm, 'rain')).toHaveLength(1)
+    run(farm, 60_000)
+    const out = farm.pigs.filter((p) => !isInside(p) && p.state !== 'lost')
+    expect(out.length).toBeLessThan(farm.pigs.length / 10)
+    run(farm, GROW_MS / RAIN_GROW - 60_000 + 1000)
+    expect(farm.beds[0].stage).toBe('ripe')
+  })
+})
+
+describe('the barn door', () => {
+  const night = (farm: Farm) => {
+    farm.t = at(1, NIGHT_START) + 1000
+    farm.tick(50)
+  }
+
+  it('farmers shut it from close by; shut out pigs wait at the door until it opens', () => {
+    const { farm, id, me } = setup()
+    farm.handle(id, { t: 'door' })
+    expect(farm.doorShut).toBe(false) // too far away
+    Object.assign(me, { x: DOOR_MID.x + 1, z: DOOR_MID.z + 1 })
+    farm.handle(id, { t: 'door' })
+    expect(farm.doorShut).toBe(true)
+    expect(farm.snapshot().door).toBe(true)
+
+    night(farm)
+    const p = lonePig(farm, 3, 2, 90)
+    p.until = 0
+    run(farm, 20_000)
+    expect(isInside(p)).toBe(false)
+    expect(dist(p, DOOR_OUT)).toBeLessThan(3)
+
+    farm.handle(id, { t: 'door' })
+    expect(run(farm, 20_000, () => isInside(p))).toBe(true)
+  })
+
+  it('left open at night, a fox can get into the barn', () => {
+    const { farm } = setup()
+    night(farm)
+    const p = lonePig(farm, 0, -17, 90)
+    farm.spawnFox()
+    Object.assign(farm.preds[0], { x: 0, z: -4 })
+    expect(run(farm, 40_000, () => p.state === 'carried')).toBe(true)
+    expect(alerts(farm, 'fox').some((a) => a.text.includes('barn'))).toBe(true)
+  })
+
+  it('shut, the barn is safe', () => {
+    const { farm } = setup()
+    farm.doorShut = true
+    night(farm)
+    const p = lonePig(farm, 0, -17, 90)
+    farm.spawnFox()
+    Object.assign(farm.preds[0], { x: 0, z: -4 })
+    let inBarn = false
+    run(farm, 40_000, () => {
+      inBarn ||= farm.preds.some((x) => isInside(x))
+      return p.state === 'carried'
+    })
+    expect(p.state).not.toBe('carried')
+    expect(inBarn).toBe(false)
+  })
+
+  it('opens itself at dawn', () => {
+    const { farm } = setup()
+    farm.doorShut = true
+    farm.t = at(2, 0) - 100
+    run(farm, 500)
+    expect(farm.doorShut).toBe(false)
+  })
+})
+
+describe('babies', () => {
+  const breed = (farm: Farm, days: number) => farm['breed'](days * DAY_MS)
+
+  it('a happy sow (with a boar about) gets pregnant now and then, and needs looking after', () => {
+    const { farm } = setup()
+    for (const p of farm.pigs) Object.assign(p, { happy: 90, hunger: 90 })
+    breed(farm, 100) // so many days that it's sure to happen
+    const mums = farm.pigs.filter((p) => p.due !== undefined)
+    expect(mums.length).toBeGreaterThan(0)
+    expect(mums.every((p) => p.sex === 'sow')).toBe(true)
+    expect(alerts(farm, 'baby').length).toBe(mums.length)
+    expect(sent(farm).some((m) => m.t === 'pig' && m.look.due !== undefined)).toBe(true)
+
+    // Expecting mums get hungry faster, and how well she's looked after shows on the snapshot.
+    const mum = mums[0]
+    const other = farm.pigs.find((p) => p.due === undefined)!
+    for (const p of [mum, other]) Object.assign(p, { hunger: 30, state: 'sleep', until: Infinity, x: -25, z: -20 })
+    run(farm, 10_000)
+    expect(mum.hunger).toBeLessThan(other.hunger)
+    expect(farm.snapshot().pigs[mum.id].care).toBe(0)
+  })
+
+  it('no boar, no babies; and none once the barn is full', () => {
+    const { farm } = setup()
+    for (const p of farm.pigs) Object.assign(p, { happy: 90, hunger: 90, sex: 'sow' })
+    breed(farm, 100)
+    expect(farm.pigs.some((p) => p.due !== undefined)).toBe(false)
+
+    const full = setup().farm
+    for (const p of full.pigs) Object.assign(p, { happy: 90, hunger: 90 })
+    while (full.pigs.length < HERD_MAX) full.giveBirth(full.pigs[0])
+    breed(full, 100)
+    expect(full.pigs.some((p) => p.due !== undefined)).toBe(false)
+  })
+
+  it('litters are 1 to 4 (4 is rare), smaller for a mum nobody looked after', () => {
+    expect(LITTER.reduce((a, b) => a + b, 0)).toBeCloseTo(1)
+    const sizes: number[] = []
+    for (let seed = 1; seed <= 80; seed++) {
+      const { farm } = setup(seed)
+      const mum = farm.pigs[0]
+      Object.assign(mum, { careGood: 100, careTotal: 100 })
+      sizes.push(farm.giveBirth(mum).length)
+    }
+    expect(Math.min(...sizes)).toBe(1)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(4)
+    expect(sizes.filter((n) => n >= 2).length).toBeGreaterThan(30)
+    expect(sizes.filter((n) => n === 4).length).toBeLessThan(20)
+
+    for (let seed = 1; seed <= 20; seed++) {
+      const { farm } = setup(seed)
+      const mum = farm.pigs[0]
+      Object.assign(mum, { careGood: 0, careTotal: 100 })
+      expect(farm.giveBirth(mum)).toHaveLength(1)
+    }
+  })
+
+  it('when she is due, mum has her babies; they follow her about and grow up', () => {
+    const { farm } = setup()
+    const mum = farm.pigs[0]
+    farm.conceive(mum)
+    expect(mum.due).toBeCloseTo(farm.days + PREGNANCY_DAYS)
+    mum.due = farm.days + 0.0001
+    farm.out = []
+    run(farm, 200)
+    expect(mum.due).toBeUndefined()
+    const pups = farm.pigs.filter((p) => p.mum === mum.id)
+    expect(pups.length).toBeGreaterThan(0)
+    expect(pups.every((p) => p.age === 0)).toBe(true)
+    expect(alerts(farm, 'baby').some((a) => a.text.includes(mum.name))).toBe(true)
+
+    const pup = pups[0]
+    for (const p of farm.pigs) Object.assign(p, { state: 'sleep', until: Infinity, x: -25, z: -20 })
+    Object.assign(mum, { x: -3, z: -4, state: 'idle', until: Infinity })
+    Object.assign(pup, { x: -3, z: 4, state: 'idle', until: 0, hunger: 95 })
+    expect(run(farm, 20_000, () => dist(pup, mum) < 2)).toBe(true)
+
+    pup.born = farm.days - PUP_DAYS
+    run(farm, 100)
+    expect(pup.age).toBe(1)
+  })
+
+  it('a saved farm keeps its babies and mums-to-be', () => {
+    const { farm } = setup()
+    const [pup] = farm.giveBirth(farm.pigs[0])
+    const mum = farm.pigs.find((p) => p.sex === 'sow' && p.age > 0 && p.id !== 0)!
+    farm.conceive(mum)
+    mum.careGood = 5
+    mum.careTotal = 10
+    const again = new Farm(seeded(5), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.pigs).toHaveLength(farm.pigs.length)
+    expect(again.pigs[pup.id]).toMatchObject({ age: 0, mum: pup.mum, name: pup.name })
+    expect(again.pigs[mum.id]).toMatchObject({ due: mum.due, careGood: 5, careTotal: 10 })
+  })
+})
+
+describe('land', () => {
+  it('a new farm is small: the barn, the yard and a dozen piggies who stay on it', () => {
+    const { farm } = setup(7, true)
+    expect(farm.land).toEqual(['barn', 'yard'])
+    expect(farm.pigs).toHaveLength(PIG_COUNT)
+    expect(farm.snapshot().land).toEqual(['barn', 'yard'])
+    // A thrown carrot over the fence lands back on the farm.
+    const out = { x: -20, z: 0 }
+    settlePig(out, 0.25)
+    expect(onFarm(out)).toBe(true)
+    // No orchard, no apples; and no apple jobs either.
+    run(farm, 90_000)
+    expect([...farm.foods.values()].some((f) => f.kind === 'apple')).toBe(false)
+    expect(farm.jobs.some((j) => j.kind === 'apples')).toBe(false)
+    expect(farm.pigs.every((p) => p.state === 'lost' || p.state === 'carried' || onFarm(p))).toBe(true)
+  })
+
+  it('squares are bought next to land the farm has, and the fence moves out', () => {
+    const { farm, id } = setup(1, true)
+    farm.coins = 1000
+    const fence = FENCE_EDGES.length
+    farm.handle(id, { t: 'land', square: 'pond' })
+    expect(farm.land).not.toContain('pond') // not next door
+    farm.handle(id, { t: 'land', square: 'garden' })
+    expect(farm.land).toContain('garden')
+    expect(farm.coins).toBe(1000 - LAND.garden.cost)
+    expect(alerts(farm, 'shop')).toHaveLength(1)
+    expect(FENCE_EDGES.length).not.toBe(fence)
+    expect(onFarm({ x: -20, z: 0 })).toBe(true)
+    farm.handle(id, { t: 'land', square: 'pond' }) // next to the garden now
+    expect(farm.land).toContain('pond')
+    expect(canBuy('flowers', farm.land)).toBe(false)
+
+    // Not without the coins.
+    farm.coins = 0
+    farm.handle(id, { t: 'land', square: 'huts' })
+    expect(farm.land).not.toContain('huts')
+
+    // Saved and loaded.
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.land).toEqual(expect.arrayContaining(['barn', 'yard', 'garden', 'pond']))
+  })
+
+  it('some upgrades need land first', () => {
+    const { farm, id } = setup(1, true)
+    farm.coins = 1000
+    farm.handle(id, { t: 'buy', upgrade: 'orchard' })
+    expect(farm.upgrades).not.toContain('orchard')
+    farm.handle(id, { t: 'land', square: 'orchard' })
+    farm.handle(id, { t: 'buy', upgrade: 'orchard' })
+    expect(farm.upgrades).toContain('orchard')
+  })
+
+  it('foxes come in over the fence of a small farm, and carry pigs back out', () => {
+    const { farm } = setup(3, true)
+    const pig = farm.pigs[0]
+    Object.assign(pig, { x: 8, z: 7.5, hunger: 90, state: 'idle', until: Infinity })
+    farm.spawnFox()
+    const fox = farm.preds[0]
+    expect(onFarm(fox)).toBe(false)
+    Object.assign(fox, { x: 8.3, z: 7.5 })
+    run(farm, 100)
+    expect(pig.state).toBe('carried')
+    expect(run(farm, 30_000, () => pig.state === 'lost')).toBe(true)
+  })
+
+  it('old saves are ignored: everyone starts small', () => {
+    const { farm } = setup()
+    const save = { ...JSON.parse(JSON.stringify(farm.save())), v: 1 }
+    const again = new Farm(seeded(2), save)
+    expect(again.land).toEqual(['barn', 'yard'])
+    expect(again.t).toBe(0)
+  })
+
+  it('pigs enjoy the new land: lush meadow grass, wild flowers and the pond', () => {
+    const { farm } = setup()
+    const p = lonePig(farm, -22, -15, 40)
+    p.happy = 40
+    Object.assign(p, { state: 'graze', until: Infinity })
+    run(farm, 5000)
+    const meadow = p.hunger
+    Object.assign(p, { x: 6, z: -5, hunger: 40 })
+    run(farm, 5000)
+    expect(meadow).toBeGreaterThan(p.hunger)
+
+    Object.assign(p, { x: 20, z: 15, happy: 40 })
+    run(farm, 5000)
+    const flowers = p.happy
+    Object.assign(p, { x: 6, z: -5, happy: 40 })
+    run(farm, 5000)
+    expect(flowers).toBeGreaterThan(p.happy)
+
+    Object.assign(p, { x: -22, z: 12.5, happy: 40, state: 'idle' })
+    run(farm, 5000)
+    expect(p.happy).toBeGreaterThan(41)
+  })
+})
+
+describe('salad night', () => {
+  const dusk = (farm: Farm) => {
+    farm.t = at(1, SALAD_FROM) + 500
+    farm.tick(50)
+  }
+
+  it('farmers make up a platter at the station and serve it at dusk; everyone comes in for supper', () => {
+    const { farm, id, me } = setup()
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    me.basket = [4, 4, 0, 0, 0]
+    farm.handle(id, { t: 'salad' })
+    expect(farm.salad).toEqual([4, 4, 0, 0, 0])
+    expect(me.basket).toEqual([0, 0, 0, 0, 0])
+    expect(farm.snapshot().salad).toMatchObject({ veg: [4, 4, 0, 0, 0], served: false, bites: 0 })
+    // Not enough variety yet.
+    dusk(farm)
+    farm.handle(id, { t: 'serve' })
+    expect(farm.saladServed).toBe(false)
+
+    me.basket = [0, 0, 3, 3, 0]
+    farm.handle(id, { t: 'salad' })
+    expect(farm.saladReady()).toBe(true)
+
+    // Everybody's out on the lawn and peckish.
+    for (const p of farm.pigs) Object.assign(p, { x: -3 + (p.id % 6) * 1.5, z: 2 + Math.floor(p.id / 6) * 1.5, hunger: 70, state: 'idle', until: farm.t + 1000 })
+    farm.out = []
+    farm.handle(id, { t: 'serve' })
+    expect(farm.saladServed).toBe(true)
+    expect(farm.foods.get(SALAD_ID)!.bites).toBe(14 * SALAD_BITES)
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('salad'))).toBe(true)
+    expect(run(farm, 40_000, () => farm.pigs.filter((p) => isInside(p)).length === farm.pigs.length)).toBe(true)
+    expect(run(farm, 20_000, () => farm.foods.get(SALAD_ID)!.bites < 14 * SALAD_BITES)).toBe(true)
+
+    // Once a night.
+    me.basket = [5, 5, 5, 0, 0]
+    farm.handle(id, { t: 'salad' })
+    expect(farm.saladSize()).toBe(0)
+
+    // Paid for in the morning, then a fresh platter can be made.
+    farm.out = []
+    farm.payDay()
+    expect(report(farm).lines.find((l) => l.label.includes('Salad'))?.coins).toBe(PAY.salad + 4 * PAY.saladKind)
+    expect(farm.saladServed).toBe(false)
+  })
+
+  it('not before dusk, and only at the station', () => {
+    const { farm, id, me } = setup()
+    farm.salad = [3, 3, 3, 3, 0]
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    expect(farm.saladServed).toBe(false)
+    dusk(farm)
+    Object.assign(me, { x: 5, z: 5 })
+    farm.handle(id, { t: 'serve' })
+    expect(farm.saladServed).toBe(false)
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    expect(farm.saladServed).toBe(true)
+  })
+})
+
+describe('momentum', () => {
+  const body = (x = 0, z = 0): Body => ({ x, y: 0, z, vx: 0, vy: 0, vz: 0 })
+  const steps = (b: Body, want: { x: number; z: number }, s: number, jump = false) => {
+    let air = false
+    for (let i = 0; i < s / 0.016; i++) air = moveFarmer(b, want, jump && i === 0, 0.016).airborne
+    return air
+  }
+
+  it('you speed up and slow down quickly, but not instantly', () => {
+    setup()
+    const b = body(0, 0)
+    steps(b, { x: WALK_SPEED, z: 0 }, 0.05)
+    expect(b.vx).toBeGreaterThan(0)
+    expect(b.vx).toBeLessThan(WALK_SPEED)
+    steps(b, { x: WALK_SPEED, z: 0 }, 0.5)
+    expect(b.vx).toBeCloseTo(WALK_SPEED, 1)
+    steps(b, { x: 0, z: 0 }, 0.05)
+    expect(b.vx).toBeGreaterThan(0)
+    steps(b, { x: 0, z: 0 }, 0.5)
+    expect(b.vx).toBe(0)
+  })
+
+  it('a jump keeps your speed, and you can only steer a little in the air', () => {
+    setup()
+    const b = body(0, 0)
+    steps(b, { x: RUN_SPEED, z: 0 }, 0.5)
+    const x0 = b.x
+    // Let go of the keys mid-jump: still flying along.
+    expect(steps(b, { x: 0, z: 0 }, 0.3, true)).toBe(true)
+    expect(b.vx).toBeCloseTo(RUN_SPEED, 1)
+    expect(b.x - x0).toBeGreaterThan(RUN_SPEED * 0.25)
+    // Steering the other way only slows you down bit by bit.
+    const before = b.vx
+    steps(b, { x: -RUN_SPEED, z: 0 }, 0.1)
+    expect(b.vx).toBeLessThan(before)
+    expect(b.vx).toBeGreaterThan(0)
+  })
+
+  it('a wall stops you', () => {
+    setup()
+    const b = body(13, -18) // just outside the barn's east wall
+    steps(b, { x: -RUN_SPEED, z: 0 }, 1)
+    expect(b.x).toBeGreaterThan(12)
+    expect(Math.abs(b.vx)).toBeLessThan(0.01)
+  })
+})
+
+describe('friends', () => {
+  it('every pig has a best friend, and they are overjoyed when a lost friend comes home', () => {
+    const { farm } = setup()
+    expect(farm.pigs[0].friend).toBe(1)
+    expect(farm.pigs[1].friend).toBe(0)
+    const p = farm.pigs[0]
+    Object.assign(p, { state: 'lost', lostUntil: farm.t + 100 })
+    run(farm, 300)
+    expect(alerts(farm, 'fun').some((a) => a.text.includes(p.name) && a.text.includes('💕'))).toBe(true)
+  })
+
+  it('old saves without friends get paired up', () => {
+    const { farm } = setup()
+    const save = JSON.parse(JSON.stringify(farm.save()))
+    for (const look of save.looks) delete look.friend
+    const again = new Farm(seeded(6), save)
+    expect(again.pigs[2].friend).toBe(3)
+  })
+})
+
+describe('the pig show', () => {
+  it('every few days the best-kept pig wins a rosette and a prize', () => {
+    const { farm } = setup()
+    // Day 3 ends: show day.
+    farm.t = at(4, 0) + 100
+    for (const p of farm.pigs) Object.assign(p, { happy: 50, hunger: 60 })
+    const star = farm.pigs[5]
+    Object.assign(star, { happy: 100, hunger: 100, issues: 0 })
+    farm.out = []
+    farm.payDay()
+    expect(star.rosettes).toBe(1)
+    expect(report(farm).lines.find((l) => l.label.includes('Pig show'))?.coins).toBe(SHOW_PRIZE)
+    expect(sent(farm).some((m) => m.t === 'pig' && m.look.id === 5 && m.look.rosettes === 1)).toBe(true)
+
+    // Not every day.
+    farm.t = at(5, 0) + 100
+    farm.out = []
+    farm.payDay()
+    expect(report(farm).lines.some((l) => l.label.includes('Pig show'))).toBe(false)
+  })
+})
+
+describe('the farm diary', () => {
+  it('counts what each farmer does, sends it on request and is saved', () => {
+    const { farm, id, me } = setup()
+    lonePig(farm, 2, 2, 30)
+    me.basket[veg('carrot')] = 2
+    Object.assign(me, { x: 2, z: 6 })
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: 2, z: 3 })
+    run(farm, 1000)
+    farm.handle(id, { t: 'diary' })
+    const diary = farm.out.find((o) => o.msg.t === 'diary')
+    expect(diary?.to).toBe(id)
+    if (diary?.msg.t !== 'diary') throw new Error('no diary')
+    expect(diary.msg.rows[0]).toMatchObject({ name: 'Ann', fed: 1, wheeks: 1 })
+
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.diaryRows()[0]).toMatchObject({ name: 'Ann', fed: 1 })
+  })
+})
+
+describe('saving the day', () => {
+  it('keeps the craving, jobs and barn door', () => {
+    const { farm } = setup()
+    farm.craving = 'apple'
+    farm.jobs[0].n = 1
+    farm.doorShut = true
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.craving).toBe('apple')
+    expect(again.jobs).toEqual(farm.jobs)
+    expect(again.doorShut).toBe(true)
+  })
+})
+
+describe('new messages', () => {
+  it('are checked', () => {
+    expect(parseClientMsg(JSON.stringify({ t: 'rename', name: '  <Mr> Biscuits!  ' }))).toEqual({ t: 'rename', name: 'Mr Biscuits!' })
+    expect(parseClientMsg(JSON.stringify({ t: 'rename', name: '<<>>' }))).toBeNull()
+    expect(parseClientMsg(JSON.stringify({ t: 'emote', e: 3 }))).toEqual({ t: 'emote', e: 3 })
+    expect(parseClientMsg(JSON.stringify({ t: 'emote', e: 4 }))).toBeNull()
+    for (const t of ['adopt', 'door', 'diary']) expect(parseClientMsg(JSON.stringify({ t }))).toEqual({ t })
+  })
+})

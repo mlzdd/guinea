@@ -63,7 +63,7 @@ describe('game server', () => {
 
     // Junk is ignored, real moves show up for everyone.
     a.ws.send('{"t":"state","x":"far"}')
-    a.send({ t: 'state', x: 3, z: 4, yaw: 1 })
+    a.send({ t: 'state', x: 3, y: 0, z: 4, yaw: 1 })
     await b.waitFor((m) => m.t === 'snap' && m.farmers.some((f) => f.name === 'Ann' && f.x === 3 && f.z === 4))
 
     const more = Array.from({ length: MAX_FARMERS - 2 }, () => client(port))

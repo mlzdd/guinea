@@ -1,11 +1,18 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, FEED_BIN, HOPPERS, dist, inRect, isInside, settleFarmer } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HOPPERS, SALAD_TABLE, dist, groundAt, inRect, isInside, setLand } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
   BOWL_MAX,
+  EMOTES,
   FARMER_COLORS,
+  LAND,
+  PUP_DAYS,
   REACH,
+  SALAD_FROM,
+  SALAD_KINDS,
+  SALAD_MAX,
+  SALAD_MIN,
   RUN_SPEED,
   SHOO_RADIUS,
   THROW_RANGE,
@@ -14,8 +21,10 @@ import {
   WALK_SPEED,
   type Veg,
   basketMax,
+  daysToShow,
   hopperMax,
 } from '../core/rules.ts'
+import { moveFarmer } from '../core/move.ts'
 import { facing, yawTowards } from '../core/vec.ts'
 import { Bubbles, type BubbleStyle } from './bubbles.ts'
 import { FarmerModel, FoxModel, HawkModel } from './critters.ts'
@@ -33,6 +42,9 @@ const CAM_PITCH = 0.95
 const THROW_COOLDOWN = 0.2
 /** Pigs further than this from you keep quiet, so the screen isn't all bubbles. */
 const CHATTER_RANGE = 30
+/** Emote keys, in EMOTES order, and how each bubble looks. */
+const EMOTE_KEYS = ['KeyZ', 'KeyX', 'KeyC', 'KeyV']
+const EMOTE_STYLE: BubbleStyle[] = ['plain', 'love', 'eek', 'wheek']
 
 const pickOne = <T>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)]
 const WHEEK = ['WHEEK!', 'wheek wheek!', 'WHEEEEK!', 'wheeek!', 'WHEEK WHEEK!']
@@ -65,6 +77,7 @@ interface FarmerView {
   model: FarmerModel
   snap: FarmerSnap
   x: number
+  y: number
   z: number
   yaw: number
   speed: number
@@ -108,7 +121,8 @@ export class Game {
   private myId = -1
   private looks: PigLook[] = []
 
-  private readonly me = { x: 0, z: -5, yaw: 0, speed: 0, model: null as FarmerModel | null }
+  private readonly me = { x: 0, y: 0, z: -5, vx: 0, vy: 0, vz: 0, yaw: 0, speed: 0, model: null as FarmerModel | null }
+  private jumpQueued = false
   private camYaw = 0
   private camDist = 22
   private readonly camTarget = new THREE.Vector3()
@@ -124,6 +138,8 @@ export class Game {
   private lastThrow = 0
   private clock = 0
   private action: Action | null = null
+  private myName = ''
+  private lastDiary = 0
 
   private readonly aim = new THREE.Vector3()
   private readonly cursor: THREE.Mesh
@@ -161,23 +177,8 @@ export class Game {
   start(net: Net, id: number, looks: PigLook[]) {
     this.net = net
     this.myId = id
-    this.looks = looks
-    this.pigs = looks.map((look) => {
-      const model = new PigModel(look)
-      this.world.scene.add(model.root)
-      return {
-        look,
-        model,
-        snap: { id: look.id, x: 0, z: 0, yaw: 0, s: 'idle', hunger: 100, happy: 100, issues: 0 },
-        prev: 'idle',
-        x: 0,
-        z: 0,
-        yaw: 0,
-        speed: 0,
-        nextChatter: Math.random() * 5,
-        phase: Math.random() * 10,
-      }
-    })
+    this.looks = []
+    for (const look of looks) this.setLook(look)
     let last = performance.now()
     const frame = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
@@ -186,6 +187,35 @@ export class Game {
       requestAnimationFrame(frame)
     }
     requestAnimationFrame(frame)
+  }
+
+  /** A pig was born, or something about one changed (name, adopter, grown up, rosette). */
+  private setLook(look: PigLook) {
+    const old = this.pigs[look.id]
+    this.looks[look.id] = look
+    if (old && old.look.age === look.age) {
+      old.look = look
+      old.model.setRosettes(look.rosettes ?? 0)
+      old.model.setPregnant(look.due !== undefined)
+      return
+    }
+    // New, or a pup that grew up: (re)build the model.
+    const model = new PigModel(look)
+    model.setPregnant(look.due !== undefined)
+    this.world.scene.add(model.root)
+    if (old) old.model.root.removeFromParent()
+    this.pigs[look.id] = {
+      look,
+      model,
+      snap: old?.snap ?? { id: look.id, x: 0, z: 0, yaw: 0, s: 'idle', hunger: 100, happy: 100, issues: 0 },
+      prev: old?.prev ?? 'idle',
+      x: old?.x ?? 0,
+      z: old?.z ?? 0,
+      yaw: old?.yaw ?? 0,
+      speed: 0,
+      nextChatter: Math.random() * 5,
+      phase: old?.phase ?? Math.random() * 10,
+    }
   }
 
   private resize() {
@@ -258,6 +288,25 @@ export class Game {
       case 'alert':
         this.hud.alert(msg.kind, msg.text)
         return
+      case 'pig': {
+        const born = !this.pigs[msg.look.id]
+        this.setLook(msg.look)
+        if (born && this.snap) {
+          const mum = msg.look.mum === undefined ? undefined : this.pigs[msg.look.mum]
+          const v = this.pigs[msg.look.id]
+          if (mum) Object.assign(v, { x: mum.x, z: mum.z })
+          this.bubbles.say(v.model.root, 'squeak!', 'love', 0.5)
+        }
+        return
+      }
+      case 'emote': {
+        const model = msg.by === this.myId ? this.me.model : this.farmers.get(msg.by)?.model
+        if (model) this.bubbles.say(model.root, EMOTES[msg.e], EMOTE_STYLE[msg.e], 2.6, 0.8)
+        return
+      }
+      case 'diary':
+        this.hud.showDiary(msg.rows, this.myName)
+        return
     }
   }
 
@@ -270,6 +319,7 @@ export class Game {
     for (const f of snap.farmers) {
       seen.add(f.id)
       if (f.id === this.myId) {
+        this.myName = f.name
         if (!this.me.model) {
           this.me.model = new FarmerModel(FARMER_COLORS[f.color], null)
           this.world.scene.add(this.me.model.root)
@@ -282,7 +332,7 @@ export class Game {
       if (!v) {
         const model = new FarmerModel(FARMER_COLORS[f.color], f.name)
         this.world.scene.add(model.root)
-        v = { model, snap: f, x: f.x, z: f.z, yaw: f.yaw, speed: 0 }
+        v = { model, snap: f, x: f.x, y: f.y, z: f.z, yaw: f.yaw, speed: 0 }
         this.farmers.set(f.id, v)
       }
       v.snap = f
@@ -354,10 +404,18 @@ export class Game {
 
     this.world.setBeds(snap.beds)
     this.world.setBowls(snap.bowls)
+    this.world.setSalad(snap.salad.veg, snap.salad.bites)
     this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
+    // The map's fences and solids follow the farm's land, for walking about here too.
+    setLand(snap.land)
+    this.world.setLand(snap.land)
     this.world.setUpgrades(snap.upgrades)
+    this.world.setDoor(snap.door)
+    this.world.setRain(snap.rain)
     this.hud.setCoins(snap.coins)
-    this.hud.setFarmers(snap.farmers, this.myId)
+    this.hud.setFarmers(snap.farmers, this.myId, this.looks)
+    this.hud.setToday(snap.craving, daysToShow(snap.day), snap.rain, snap.zoom)
+    this.hud.setJobs(snap.jobs)
     this.hud.setClock(snap.day, snap.time)
     this.hud.setStats(snap.pigs, snap.pigs.filter((p) => p.s !== 'lost' && isInside(p)).length, snap.pigs.length)
     this.hud.setBasket(this.basket(), this.selected, this.basketMax())
@@ -386,18 +444,32 @@ export class Game {
     } else if (code === 'KeyF') {
       this.send({ t: 'shoo' })
       if (this.me.model) this.bubbles.say(this.me.model.root, pickOne(['SHOO!', 'GO ON, SHOO!', 'OI! SHOO!']), 'shoo', 2.6, 0.8)
+    } else if (EMOTE_KEYS.includes(code)) {
+      this.send({ t: 'emote', e: EMOTE_KEYS.indexOf(code) })
     } else if (code === 'KeyB') {
       this.hud.hideReport()
+      this.hud.toggleDiary(false)
       this.hud.toggleShop()
+    } else if (code === 'KeyL') {
+      this.hud.hideReport()
+      this.hud.toggleShop(false)
+      this.hud.toggleDiary()
+      if (this.hud.diaryOpen) this.askDiary()
     } else if (code === 'Escape') {
       this.hud.toggleShop(false)
+      this.hud.toggleDiary(false)
       this.hud.hideReport()
     } else if (code === 'KeyH') {
       const help = document.getElementById('help')!
       help.classList.toggle('open')
     } else if (code === 'Space') {
-      this.throwVeg()
+      this.jumpQueued = true
     }
+  }
+
+  private askDiary() {
+    this.lastDiary = this.clock
+    this.send({ t: 'diary' })
   }
 
   private throwVeg() {
@@ -442,39 +514,36 @@ export class Game {
     const mv = this.input.move()
     const fwd = facing(this.camYaw)
     const right = { x: Math.cos(this.camYaw), z: -Math.sin(this.camYaw) }
-    let dx = right.x * mv.x + fwd.x * mv.y
-    let dz = right.z * mv.x + fwd.z * mv.y
+    const dx = right.x * mv.x + fwd.x * mv.y
+    const dz = right.z * mv.x + fwd.z * mv.y
     const len = Math.hypot(dx, dz)
     const run = this.input.down('ShiftLeft', 'ShiftRight') && holding === null
-    const speed = len > 0 ? (run ? RUN_SPEED : WALK_SPEED) : 0
-    if (len > 0) {
-      dx /= len
-      dz /= len
-      const before = { x: this.me.x, z: this.me.z }
-      const p = { x: this.me.x + dx * speed * dt, z: this.me.z + dz * speed * dt }
-      settleFarmer(p)
-      this.me.x = p.x
-      this.me.z = p.z
-      this.me.speed = dist(before, p) / dt
-      this.me.yaw = lerpAngle(this.me.yaw, yawTowards({ x: 0, z: 0 }, { x: dx, z: dz }), Math.min(1, dt * 12))
-    } else {
-      this.me.speed = 0
-    }
+    const speed = len > 0 ? (run ? RUN_SPEED : WALK_SPEED) / len : 0
+
+    // Momentum, jumping and falling: anything lower than your feet doesn't get in the way, and you land on whatever's under you.
+    const { airborne } = moveFarmer(this.me, { x: dx * speed, z: dz * speed }, this.jumpQueued, dt)
+    this.jumpQueued = false
+    this.me.speed = Math.hypot(this.me.vx, this.me.vz)
+    // Face where you're going (where you're steering, in the air).
+    const face = airborne && len > 0 ? { x: dx, z: dz } : { x: this.me.vx, z: this.me.vz }
+    if (Math.hypot(face.x, face.z) > 0.3) this.me.yaw = lerpAngle(this.me.yaw, yawTowards({ x: 0, z: 0 }, face), Math.min(1, dt * 12))
     const mine = this.me.model
-    mine.root.position.set(this.me.x, mine.root.position.y, this.me.z)
+    mine.root.position.set(this.me.x, 0, this.me.z)
     mine.root.rotation.y = this.me.yaw
     const basket = this.basket()
     const top = basket.findLastIndex((n) => n > 0)
     const sack = this.hasSack()
-    mine.pose(dt, this.me.speed, holding !== null || sack, basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack)
+    mine.pose(dt, airborne ? 0 : this.me.speed, holding !== null || sack, basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack, airborne)
+    mine.root.position.y += this.me.y
 
     if (performance.now() - this.lastSend > SEND_MS) {
       this.lastSend = performance.now()
-      this.send({ t: 'state', x: Math.round(this.me.x * 100) / 100, z: Math.round(this.me.z * 100) / 100, yaw: Math.round(this.me.yaw * 100) / 100 })
+      const r2 = (v: number) => Math.round(v * 100) / 100
+      this.send({ t: 'state', x: r2(this.me.x), y: r2(this.me.y), z: r2(this.me.z), yaw: r2(this.me.yaw) })
     }
 
     // Camera follows from behind and above.
-    this.camTarget.lerp(new THREE.Vector3(this.me.x, 0.8, this.me.z), Math.min(1, dt * 6))
+    this.camTarget.lerp(new THREE.Vector3(this.me.x, 0.8 + this.me.y * 0.5, this.me.z), Math.min(1, dt * 6))
     const flat = this.camDist * Math.cos(CAM_PITCH)
     this.camera.position.set(
       this.camTarget.x + Math.sin(this.camYaw) * flat,
@@ -493,14 +562,27 @@ export class Game {
 
     const inside = isInside(this.me)
     this.world.setCutaway(inside)
+    this.world.update(dt, this.camTarget)
     this.world.setTime(this.snap.time, this.camTarget)
+    // Keep the diary fresh while it's open.
+    if (this.hud.diaryOpen && this.clock - this.lastDiary > 3) this.askDiary()
     this.bubbles.update(dt)
-    this.hud.updateShop(this.snap.coins, this.snap.upgrades, (upgrade) => this.send({ t: 'buy', upgrade }))
-    this.hud.showCheck(holding === null ? null : this.looks[holding], holding === null ? null : this.pigs[holding].snap, {
-      treat: (issue) => this.send({ t: 'treat', issue }),
-      cuddle: () => this.send({ t: 'cuddle' }),
-      putDown: () => this.send({ t: 'putdown' }),
+    this.hud.updateShop(this.snap.coins, this.snap.upgrades, this.snap.land, {
+      upgrade: (upgrade) => this.send({ t: 'buy', upgrade }),
+      land: (square) => this.send({ t: 'land', square }),
     })
+    this.hud.showCheck(
+      holding === null ? null : this.looks[holding],
+      holding === null ? null : this.pigs[holding].snap,
+      {
+        treat: (issue) => this.send({ t: 'treat', issue }),
+        cuddle: () => this.send({ t: 'cuddle' }),
+        putDown: () => this.send({ t: 'putdown' }),
+        rename: (name) => this.send({ t: 'rename', name }),
+        adopt: () => this.send({ t: 'adopt' }),
+      },
+      { myName: this.myName, family: holding === null ? '' : this.family(this.looks[holding]) },
+    )
     this.renderer.render(this.world.scene, this.camera)
   }
 
@@ -511,13 +593,16 @@ export class Game {
       const ox = v.x
       const oz = v.z
       v.x += (s.x - v.x) * k
+      v.y += (s.y - v.y) * Math.min(1, dt * 15)
       v.z += (s.z - v.z) * k
       v.speed = v.speed * 0.8 + (Math.hypot(v.x - ox, v.z - oz) / dt) * 0.2
       v.yaw = lerpAngle(v.yaw, s.yaw, k)
-      v.model.root.position.set(v.x, v.model.root.position.y, v.z)
+      v.model.root.position.set(v.x, 0, v.z)
       v.model.root.rotation.y = v.yaw
       const top = s.basket.findLastIndex((n) => n > 0)
-      v.model.pose(dt, v.speed, s.holding !== null || s.sack, s.basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack)
+      const airborne = v.y > groundAt(v) + 0.05
+      v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || s.sack, s.basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, airborne)
+      v.model.root.position.y += v.y
     }
   }
 
@@ -554,7 +639,7 @@ export class Game {
   }
 
   private updatePigs(dt: number) {
-    const holders = new Map<number, { x: number; z: number; yaw: number }>()
+    const holders = new Map<number, { x: number; y: number; z: number; yaw: number }>()
     for (const f of this.snap!.farmers) {
       if (f.holding === null) continue
       const v = f.id === this.myId ? this.me : this.farmers.get(f.id)
@@ -563,9 +648,12 @@ export class Game {
     const carriers = new Map<number, PredView>()
     for (const v of this.preds.values()) if (v.snap.pig !== null && v.snap.s !== 'sneak' && v.snap.s !== 'circle' && v.snap.s !== 'swoop') carriers.set(v.snap.pig, v)
 
+    // Pups grow from half size to full over PUP_DAYS.
+    const days = this.snap!.day - 1 + this.snap!.time
     for (const v of this.pigs) {
       const s = v.snap
       const m = v.model
+      if (v.look.age === 0) m.root.scale.setScalar(0.5 + 0.5 * Math.min(1, Math.max(0, (days - (v.look.born ?? days)) / PUP_DAYS)))
       if (s.s === 'lost') {
         m.root.visible = false
         v.prev = s.s
@@ -581,7 +669,7 @@ export class Game {
         v.x = holder.x + f.x * 0.45
         v.z = holder.z + f.z * 0.45
         v.yaw = holder.yaw + Math.PI / 2
-        m.root.position.set(v.x, 1.0, v.z)
+        m.root.position.set(v.x, 1.0 + holder.y, v.z)
       } else if (carrier) {
         const f = facing(carrier.yaw)
         const fox = carrier.fox !== null
@@ -627,7 +715,9 @@ export class Game {
         case 'popcorn':
           return say(pickOne(['wheee!', 'popcorn!', 'boing!']), 'love', 1.6)
         case 'beg':
-          return say(pickOne(['wheek? 🥕', 'WHEEK!', 'wheek wheek?']), 'wheek', 1)
+          return say(this.atShutDoor(v) ? pickOne(['let me in!', 'wheek? 🚪', 'WHEEK! door!']) : pickOne(['wheek? 🥕', 'WHEEK!', 'wheek wheek?']), 'wheek', 1)
+        case 'zoom':
+          return say(pickOne(['wheee!', 'ZOOM!', 'zoomies!', 'nyoom!']), 'love', 1.2)
         case 'sneeze':
           return say('achoo!', 'plain', 2)
         case 'scratch':
@@ -647,7 +737,7 @@ export class Game {
       case 'seek':
         return say(pickOne(WHEEK), 'wheek', 1.4)
       case 'beg':
-        return say(pickOne(WHEEK), 'wheek', 1)
+        return say(this.atShutDoor(v) ? 'let me in!' : pickOne(WHEEK), 'wheek', 1)
       case 'carried':
         return say(pickOne(['EEEK!', 'HELP!', 'EEEEK!']), 'eek', 0.8)
       case 'sleep':
@@ -665,6 +755,30 @@ export class Game {
         if (Math.random() < 0.08) return say(pickOne(['chut chut', 'purr', 'wheek?']), 'plain', 8)
         v.nextChatter = this.clock + 3 + Math.random() * 4
     }
+  }
+
+  private atShutDoor(v: PigView) {
+    return !!this.snap?.door && Math.hypot(v.x - DOOR_OUT.x, v.z - DOOR_OUT.z) < 3
+  }
+
+  /** Who a pig is to the others, for the check card and the hover label. */
+  private family(look: PigLook): string {
+    const bits: string[] = []
+    const name = (id: number | undefined) => (id === undefined ? undefined : this.looks[id]?.name)
+    if (look.adopter) bits.push(`⭐ ${look.adopter}’s piggy`)
+    if (name(look.friend)) bits.push(`💕 best friends with ${name(look.friend)}`)
+    if (look.age === 0 && name(look.mum)) bits.push(`🐣 mum is ${name(look.mum)}`)
+    if (look.due !== undefined && this.snap) {
+      const left = Math.max(0, look.due - (this.snap.day - 1 + this.snap.time))
+      const care = this.pigs[look.id]?.snap.care ?? 100
+      bits.push(
+        `🤰 expecting, due in ${left < 1 ? 'under a day' : `${left.toFixed(1)} days`} · looked after: <b class="${care < 50 ? 'bad' : 'ok'}">${care}%</b> (keep her fed and happy)`,
+      )
+    }
+    const pups = this.looks.filter((l) => l.mum === look.id && l.age === 0).map((l) => l.name)
+    if (pups.length) bits.push(`🍼 mum of ${pups.join(', ')}`)
+    if (look.rosettes) bits.push(`🏆 ×${look.rosettes}`)
+    return bits.join(' · ')
   }
 
   private updateFlying(dt: number) {
@@ -718,6 +832,21 @@ export class Game {
     if (holding !== null) {
       best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
     } else {
+      const door = dist(me, DOOR_MID)
+      if (door < REACH + 0.3) offer({ label: snap.door ? 'Open the barn door 🚪' : 'Shut the barn door 🚪', msg: { t: 'door' }, d: door - 0.5 })
+      const table = dist(me, SALAD_TABLE)
+      if (table < REACH) {
+        const sal = snap.salad
+        const total = sal.veg.reduce((a, b) => a + b, 0)
+        const kinds = sal.veg.filter((n) => n > 0).length
+        const ready = total >= SALAD_MIN && kinds >= SALAD_KINDS
+        const d = table - 0.8
+        if (sal.served) offer({ label: '🥗 Tonight’s salad is served! Make another tomorrow', msg: null, d })
+        else if (count > 0 && total < SALAD_MAX) offer({ label: `Put your veg in the salad 🥗 (${total}/${SALAD_MAX})`, msg: { t: 'salad' }, d })
+        else if (ready && snap.time >= SALAD_FROM) offer({ label: '<b>Serve the salad platter 🥗 Supper time!</b>', msg: { t: 'serve' }, d })
+        else if (ready) offer({ label: `🥗 Salad’s ready (${total} veg, ${kinds} kinds): serve it at dusk`, msg: null, d })
+        else offer({ label: `🥗 Salad: ${total}/${SALAD_MIN} veg, ${kinds}/${SALAD_KINDS} kinds. Bring veg from the garden!`, msg: null, d })
+      }
       const bin = dist(me, FEED_BIN)
       if (bin < reach) offer(sack ? { label: 'Put the sack back', msg: { t: 'sack' }, d: bin - 1 } : { label: 'Pick up a sack of pellets', msg: { t: 'sack' }, d: bin - 1 })
       HOPPERS.forEach((h, i) => {
@@ -740,6 +869,7 @@ export class Game {
         const rect = { x0: b.x - BED_W / 2, x1: b.x + BED_W / 2, z0: b.z - BED_D / 2, z1: b.z + BED_D / 2 }
         if (!inRect(me, rect, REACH * 0.55)) return
         const d = dist(me, b) - 2
+        if (!snap.land.includes(b.square)) return offer({ label: `🔒 ${LAND[b.square].icon} ${LAND[b.square].name}: buy it in the shop (B)`, msg: null, d })
         const stage = snap.beds[i].stage
         const name = `${VEG_ICON[b.kind]} ${VEG_LABEL[b.kind].toLowerCase()}s`
         if (stage === 'ripe')
@@ -812,7 +942,15 @@ export class Game {
         const d = Math.hypot(sx - mx, sy - my)
         if (d < bestD) {
           bestD = d
-          tip = `<b>${v.look.name}</b> · ${mood(v.snap)}`
+          const extra = [
+            v.look.adopter ? `⭐ ${v.look.adopter}’s` : '',
+            v.look.rosettes ? `🏆×${v.look.rosettes}` : '',
+            v.look.age === 0 ? '🐣 baby' : '',
+            v.look.due !== undefined ? '🤰 expecting' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')
+          tip = `<b>${v.look.name}</b> · ${mood(v.snap)}${extra ? `<br><small>${extra}</small>` : ''}`
           tx = sx
           ty = sy
         }

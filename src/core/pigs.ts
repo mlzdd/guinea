@@ -1,4 +1,4 @@
-/** What each guinea pig looks like and who they are. Made once per farm and never changes. */
+/** What each guinea pig looks like and who they are. Made once per farm; only the name, family, friends and prizes change. */
 
 export type Breed = 'smooth' | 'abyssinian' | 'peruvian' | 'teddy'
 /**
@@ -19,6 +19,17 @@ export interface PigLook {
   age: number
   /** Weight in grams when well fed. */
   weight: number
+  /** The farmer who adopted this pig (their name), if anyone has. */
+  adopter?: string
+  /** Best friend: they like to hang out together. */
+  friend?: number
+  /** A baby's mum, and when it was born, in farm days (pups are age 0 until they grow up). */
+  mum?: number
+  born?: number
+  /** Expecting: when the babies are due, in farm days. */
+  due?: number
+  /** Pig show wins. */
+  rosettes?: number
 }
 
 export const BREED_NAMES: Record<Breed, string> = {
@@ -48,6 +59,8 @@ const NAMES = [
   'Hobnob', 'Bourbon', 'Jammie', 'Fig', 'Olive', 'Bagel', 'Pudding', 'Snowy', 'Smudge', 'Patch',
   'Rolo', 'Twix', 'Kipper', 'Bubble', 'Doughnut', 'Gherkin', 'Rocket', 'Sage', 'Wasabi', 'Noodle',
 ]
+
+const NAME_LIMIT = 16
 
 const pick = <T>(rand: () => number, xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]
 
@@ -87,5 +100,31 @@ export function makePigLooks(count: number, rand: () => number): PigLook[] {
       weight: Math.round((850 + rand() * 400) / 10) * 10,
     })
   }
+  // At least one of each, so there can be babies.
+  if (looks.length > 1) {
+    looks[0].sex = 'sow'
+    looks[1].sex = 'boar'
+  }
+  // Everyone has a best friend: pigs pair up in twos.
+  for (const look of looks) if ((look.id ^ 1) < looks.length) look.friend = look.id ^ 1
   return looks
+}
+
+/** A newborn: mum's colours (more or less), a name nobody on the farm has yet. */
+export function babyLook(id: number, mum: PigLook, taken: string[], born: number, rand: () => number): PigLook {
+  const free = NAMES.filter((n) => !taken.includes(n))
+  const name = free.length ? pick(rand, free) : `${mum.name} Jr`
+  const coat: [string, string, string] = rand() < 0.7 ? [...mum.coat] : [mum.coat[0], pick(rand, Object.values(COLORS)), mum.coat[2]]
+  return {
+    id,
+    name: name.slice(0, NAME_LIMIT),
+    breed: rand() < 0.75 ? mum.breed : pick(rand, ['smooth', 'abyssinian', 'peruvian', 'teddy'] as const),
+    pattern: mum.pattern,
+    coat,
+    sex: rand() < 0.5 ? 'sow' : 'boar',
+    age: 0,
+    weight: Math.round((850 + rand() * 400) / 10) * 10,
+    mum: mum.id,
+    born,
+  }
 }

@@ -1,6 +1,6 @@
 import { BEDS, BOWLS, HOPPERS } from './map.ts'
 import type { PigLook } from './pigs.ts'
-import { FARMER_COLORS, ISSUES, UPGRADE_IDS, VEGGIES, type Issue, type UpgradeId, type Veg } from './rules.ts'
+import { EMOTES, FARMER_COLORS, ISSUES, SQUARE_IDS, UPGRADE_IDS, VEGGIES, type Issue, type SquareId, type Stat, type UpgradeId, type Veg } from './rules.ts'
 
 export type PigState =
   | 'idle'
@@ -14,6 +14,8 @@ export type PigState =
   | 'home'
   | 'sleep'
   | 'popcorn'
+  /** Zoomies: racing about when the zoomometer fills up. */
+  | 'zoom'
   | 'scratch'
   | 'sneeze'
   | 'held'
@@ -28,6 +30,8 @@ export interface FarmerSnap {
   name: string
   color: number
   x: number
+  /** Feet height: up on something, or mid-jump. */
+  y: number
   z: number
   yaw: number
   /** Count of each veg, in VEGGIES order. */
@@ -47,6 +51,8 @@ export interface PigSnap {
   happy: number
   /** ISSUE_BIT flags. */
   issues: number
+  /** Expecting: how well she's been looked after so far, 0..100. */
+  care?: number
 }
 
 export interface FoodSnap {
@@ -74,9 +80,20 @@ export interface PredSnap {
   pig: number | null
 }
 
+/** One of the day's jobs. */
+export interface JobSnap {
+  kind: Stat
+  text: string
+  n: number
+  goal: number
+}
+
+/** A farmer's line in the farm diary: everything they've done, all time. */
+export type DiaryRow = { name: string } & Record<Stat, number>
+
 export type ClientMsg =
   | { t: 'join'; name: string; color: number }
-  | { t: 'state'; x: number; z: number; yaw: number }
+  | { t: 'state'; x: number; y: number; z: number; yaw: number }
   | { t: 'throw'; veg: Veg; x: number; z: number }
   | { t: 'plant'; bed: number }
   | { t: 'harvest'; bed: number }
@@ -91,8 +108,22 @@ export type ClientMsg =
   | { t: 'sack' }
   | { t: 'pour'; hopper: number }
   | { t: 'buy'; upgrade: UpgradeId }
+  /** Buy a square of land. */
+  | { t: 'land'; square: SquareId }
+  /** Rename the pig you're holding. */
+  | { t: 'rename'; name: string }
+  /** Adopt the pig you're holding (or let it go if it's already yours). */
+  | { t: 'adopt' }
+  | { t: 'emote'; e: number }
+  /** At the salad station: put your veg in the platter, or serve it (at dusk). */
+  | { t: 'salad' }
+  | { t: 'serve' }
+  /** Open or shut the barn door (when standing by it). */
+  | { t: 'door' }
+  /** Ask for the farm diary. */
+  | { t: 'diary' }
 
-export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop'
+export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop' | 'fun' | 'job' | 'baby' | 'rain'
 
 export type ServerMsg =
   /** Sent to a page that hasn't joined yet, and again when the farmer count changes. */
@@ -116,6 +147,18 @@ export type ServerMsg =
       /** The farm's shared wallet, and what it has bought. */
       coins: number
       upgrades: UpgradeId[]
+      /** Treat of the day. */
+      craving: Veg
+      jobs: JobSnap[]
+      rain: boolean
+      /** The barn door is shut. */
+      door: boolean
+      /** The zoomometer, 0..1: zoomies when it's full. */
+      zoom: number
+      /** The squares of land the farm owns. */
+      land: SquareId[]
+      /** The salad platter: veg in it (VEGGIES order), whether tonight's has been served, and bites left on the floor. */
+      salad: { veg: number[]; served: boolean; bites: number }
     }
   /** End of a day: how it went and what it earned. */
   | { t: 'report'; day: number; lines: { label: string; coins: number }[]; total: number; stars: number; coins: number }
@@ -124,14 +167,19 @@ export type ServerMsg =
   | { t: 'shoo'; by: number; x: number; z: number }
   | { t: 'purr'; pig: number }
   | { t: 'alert'; kind: AlertKind; text: string }
+  /** A pig was born, renamed, adopted, grew up or won a rosette. */
+  | { t: 'pig'; look: PigLook }
+  | { t: 'emote'; by: number; e: number }
+  | { t: 'diary'; rows: DiaryRow[] }
 
 const MAX_NAME = 16
 /** Farmer positions further out than this are nonsense. */
 const MAX_COORD = 60
+const MAX_Y = 4
 
-export function cleanName(name: unknown): string {
+export function cleanName(name: unknown, fallback = 'Farmer'): string {
   const s = typeof name === 'string' ? name.replace(/[^\p{L}\p{N} _\-!?.']/gu, '').trim().slice(0, MAX_NAME) : ''
-  return s || 'Farmer'
+  return s || fallback
 }
 
 const isNum = (v: unknown, limit = MAX_COORD): v is number =>
@@ -155,7 +203,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return { t: 'join', name: cleanName(o.name), color: isIndex(o.color, FARMER_COLORS.length) ? o.color : 0 }
     case 'state':
       if (!isNum(o.x) || !isNum(o.z) || !isNum(o.yaw, 1e6)) return null
-      return { t: 'state', x: o.x, z: o.z, yaw: o.yaw }
+      // Older clients don't send y; nobody gets higher than a jump off a hay stack.
+      return { t: 'state', x: o.x, y: isNum(o.y, MAX_Y) ? Math.max(0, o.y) : 0, z: o.z, yaw: o.yaw }
     case 'throw':
       if (!isVeg(o.veg) || !isNum(o.x) || !isNum(o.z)) return null
       return { t: 'throw', veg: o.veg, x: o.x, z: o.z }
@@ -174,6 +223,17 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return isIndex(o.hopper, HOPPERS.length) ? { t: 'pour', hopper: o.hopper } : null
     case 'buy':
       return UPGRADE_IDS.includes(o.upgrade as UpgradeId) ? { t: 'buy', upgrade: o.upgrade as UpgradeId } : null
+    case 'land':
+      return SQUARE_IDS.includes(o.square as SquareId) ? { t: 'land', square: o.square as SquareId } : null
+    case 'rename':
+      return typeof o.name === 'string' && cleanName(o.name, '') ? { t: 'rename', name: cleanName(o.name) } : null
+    case 'emote':
+      return isIndex(o.e, EMOTES.length) ? { t: 'emote', e: o.e } : null
+    case 'adopt':
+    case 'salad':
+    case 'serve':
+    case 'door':
+    case 'diary':
     case 'putdown':
     case 'cuddle':
     case 'shoo':
