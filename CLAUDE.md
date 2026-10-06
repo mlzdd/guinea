@@ -11,6 +11,7 @@ Stack: Vite 8 + TypeScript 6 + three.js + `ws`, tested with Vitest 5, linted wit
 | `npm run dev` | Dev server + farm server on port 5173, reachable on the LAN |
 | `npm run build && npm run preview` | Production build on port 4173 (farm server runs there too) |
 | `npx vitest run` | Tests (`npm test` = watch mode) |
+| `npm run restore` | List checkpoints; `npm run restore -- day003-1440` loads one (stop the server first) |
 | `npx tsc -b` | Type-check app, server and tests |
 | `npm run lint` | oxlint |
 
@@ -58,22 +59,22 @@ src/core/            Shared by browser and server (no DOM). Imports use .ts exte
   vec.ts             facing(yaw), yawTowards (yaw 0 looks down −Z)
 src/client/
   game.ts            Main loop: walking, camera, aiming, E-action picking + prompt, throwing, syncing pigs/farmers/food/predators from snapshots, bubbles, predator edge arrows, hover tooltip
-  world.ts           The static scene from map.ts (barn with removable roof, garden beds with growing crops, orchard, hidey huts, fences, trees beyond) + bowls' food piles + day/night lighting and lamps
-  pig.ts             PigModel: built from the look; pose() animates walking, eating, grazing, sleeping, popcorning, begging, being held/carried
-  critters.ts        FarmerModel (straw hat, overalls in their colour, wellies, basket), FoxModel, HawkModel (+ ground shadow), textSprite
+  world.ts           The scene from map.ts: each land square's things (shown once bought; long grass and a for-sale sign before), the fence round the owned land, barn with removable roof and its gate, hay racks, feed bin, salad station, garden beds with growing crops, orchard, hay field and stack yard, pond with ducks, flowers. Bowls', hoppers', racks' and platters' levels, upgrades, rain and puddles, day/night lighting (`darkness`) and lamps
+  pig.ts             PigModel: built from the look; pose() animates walking, eating, grazing, sleeping, popcorning, zooming, moping (and a droopy walk when poorly), begging, being held/carried. Rosettes, a pregnant tummy
+  critters.ts        FarmerModel (straw hat, overalls in their colour, wellies, basket with veg or hay, a pellet sack, jump pose), FoxModel, HawkModel (+ ground shadow), textSprite
   veg.ts             makeVeg (carrot, lettuce, cucumber, pepper, apple), icons, shared materials
   bubbles.ts         Comic speech bubbles as sprites (cached canvas textures, one per thing at a time)
-  hud.ts             DOM overlay: clock, coins, farm stats, shop, end-of-day report card, farmer list, alert feed, toasts, basket slots, action prompt, health check card, predator arrows, tooltip
-  input.ts           Keyboard (WASD/arrows, Shift, E, F, 1–5, Space, H, Q/R) and mouse (aim, click, right-drag, wheel)
+  hud.ts             DOM overlay: clock (Day/Night), craving + pig show + zoomometer, coins, farm stats, shop (tabs, land map), end-of-day report card, farm diary, farmer list, today's jobs, alert feed, toasts, basket slots (+ hay), action prompt, health check card (rename, adopt, family), predator arrows, tooltip, night shading
+  input.ts           Keyboard (WASD/arrows, Shift, E, F, 1–5, Space, Z X C V, B, L, H, Q/R) and mouse (aim, click, right-drag, wheel)
   net.ts             WebSocket to ws://<same host>/ws
 src/main.ts          Lobby (name + overalls colour remembered in localStorage `guinea.name` / `.color`, a spinning random piggy), connects on load for `info`, starts Game on `welcome`
-tests/core/          farm.test.ts: feeding, pellets, money and upgrades, garden, health checks, foxes and hawks, night, saving, a 5-minute soak that no pig gets stuck in a wall. fun.test.ts: craving, jobs, names/adopting, emotes, jumping, zoomies, rain, barn door, breeding, land, salad night, momentum, friends, pig show, diary. helpers.ts: seeded farm setup
-server/plugin.ts     The farm server (Vite plugin): ticks, snapshots, saving. checkpoints.ts: the half-hourly checkpoints. restore.ts: `npm run restore`
+tests/core/          farm.test.ts: feeding, pellets and hay, money and upgrades, garden, health checks, foxes and hawks, night and where pigs sleep, saving, soaks that no pig gets stuck in a wall (small farm and all land). fun.test.ts: craving, jobs, names/adopting, emotes, jumping, zoomies, rain, barn door, breeding, land (and shooed foxes leaving), poorly pigs, herding, salad night, momentum, friends, pig show, diary. helpers.ts: seeded farm setup
+server/plugin.ts     The farm server (Vite plugin): ticks, snapshots, saving. checkpoints.ts: the 10-minute checkpoints. restore.ts: `npm run restore`
 tests/server/        Real HTTP + ws server filled to MAX_FARMERS + 1; checkpoints
 ```
 
 ## Ideas not built yet
 
-- Water bottles to refill, hay to restock, cleaning out the hutches
+- Water bottles to refill, cleaning out the hutches
 - Snow days, a heater that matters more in winter
 - Pig friendships forming over time (rather than fixed pairs)
