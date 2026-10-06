@@ -96,6 +96,29 @@ export const PIG_HOUSES: P[] = [
   { x: 9.3, z: -23.2 },
 ]
 
+/**
+ * Where pigs sleep: snug spots round the edges of the barn (in and round the little houses, the corners, along the
+ * side walls and in front of the hay racks), never out in the middle.
+ */
+export const BED_SPOTS: P[] = [
+  ...PIG_HOUSES.flatMap((h) => [
+    { x: h.x, z: h.z },
+    { x: h.x + (h.x < 0 ? 1 : -1), z: h.z + 0.6 },
+    { x: h.x + (h.x < 0 ? 1 : -1), z: h.z - 0.6 },
+  ]),
+  ...[-1, 1].flatMap((side) => [
+    { x: side * 10.7, z: -24.3 },
+    { x: side * 10.7, z: -11.3 },
+    { x: side * 10.9, z: -16.4 },
+    { x: side * 10.9, z: -21 },
+  ]),
+  ...[-8, 0, 8].flatMap((x) => [
+    { x: x - 1, z: -23.4 },
+    { x, z: -23.3 },
+    { x: x + 1, z: -23.4 },
+  ]),
+]
+
 // ---------------------------------------------------------------- what's in each square
 
 /** Veg gardens: fenced so pigs can't raid them, each with a gate for farmers. One little one in the yard to start. */
@@ -159,7 +182,7 @@ const trunks = TREES.map((t) => r(t.x - TRUNK, t.x + TRUNK, t.z - TRUNK, t.z + T
 export const HIDEYS: (P & { square: SquareId })[] = [
   { x: -8, z: 1, square: 'yard' },
   { x: 6, z: -3, square: 'yard' },
-  { x: -14, z: -22, square: 'meadow' },
+  { x: -29, z: -10, square: 'meadow' },
   { x: -1, z: 12, square: 'huts' },
   { x: -8, z: 19, square: 'huts' },
   { x: 7, z: 19, square: 'huts' },
@@ -171,16 +194,31 @@ export const HIDEY_D = 1.4
 export const HIDEY_H = 1.1
 const hutRect = (h: P) => r(h.x - HIDEY_W / 2, h.x + HIDEY_W / 2, h.z - HIDEY_D / 2, h.z + HIDEY_D / 2)
 
-/** Stacked hay bales in the corners of the hay meadow, for looks, a bit of cover and climbing. */
-export const HAY_BALES: Rect[] = [r(-31, -29, -25, -21.5), r(-15, -13, -12.2, -9.5)]
-export const HAY_H = 1.4
-/** The hay meadow's field: a grid of patches of tall hay. Cut an armful from one and it grows back. */
-export const HAY_PATCH = 2.8
-export const HAY_PATCHES: Rect[] = [-22.5, -18.5, -14.5, -10.5].flatMap((z) =>
-  [-27.5, -24, -20.5, -17].map((x) => r(x - HAY_PATCH / 2, x + HAY_PATCH / 2, z - HAY_PATCH / 2, z + HAY_PATCH / 2)),
+/** The stack yard down the left of the hay meadow: drop armfuls of cut hay here to build up haystacks, take them to the racks later. */
+export const HAY_STACKS: P[] = [
+  { x: -29, z: -22.5 },
+  { x: -29, z: -18 },
+  { x: -29, z: -13.5 },
+]
+/** The haystack you're next to, if any. */
+export const hayStackAt = (p: P) => HAY_STACKS.findIndex((s) => dist(p, s) < 1.8)
+/** The hay meadow's field: a 4×4 grid of touching patches of tall hay. Cut an armful from one and it grows back. */
+export const HAY_PATCH = 3.5
+const FIELD = { x0: -26.5, z0: -24.5 }
+export const HAY_PATCHES: Rect[] = [0, 1, 2, 3].flatMap((row) =>
+  [0, 1, 2, 3].map((col) => {
+    const x0 = FIELD.x0 + col * HAY_PATCH
+    const z0 = FIELD.z0 + row * HAY_PATCH
+    return r(x0, x0 + HAY_PATCH, z0, z0 + HAY_PATCH)
+  }),
 )
-/** The patch you're standing on (or right next to), if any. */
-export const hayPatchAt = (p: P) => HAY_PATCHES.findIndex((h) => inRect(p, h, 0.6))
+/** The whole field. It's tall enough to lose a pig in, so pigs graze round it rather than in it (farmers wade through). */
+export const HAY_FIELD = r(FIELD.x0, FIELD.x0 + 4 * HAY_PATCH, FIELD.z0, FIELD.z0 + 4 * HAY_PATCH)
+/** The patch you're standing on (or, at the edge of the field, right next to), if any. */
+export const hayPatchAt = (p: P) => {
+  const on = HAY_PATCHES.findIndex((h) => inRect(p, h))
+  return on >= 0 ? on : HAY_PATCHES.findIndex((h) => inRect(p, h, 0.6))
+}
 
 /** The pond: water nobody walks on. Pigs resting nearby (POND_CALM) get happier. */
 export const POND = r(-27, -17, 14, 20)
@@ -251,14 +289,14 @@ export function setLand(ids: readonly SquareId[]) {
 
   const gardens = GARDENS.filter((g) => owns(g.square))
   const trees = owns('orchard') ? trunks : []
-  const hay = owns('meadow') ? HAY_BALES : []
+  const field = owns('meadow') ? [HAY_FIELD] : []
   const pond = owns('pond') ? [POND] : []
   const fill = <T>(arr: T[], items: T[]) => {
     arr.length = 0
     arr.push(...items)
   }
-  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...hay, ...pond, ...FENCE])
-  fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...hay, ...pond, DOOR_GATE])
+  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE])
+  fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...pond, DOOR_GATE])
   const tall = (h: number) => (b: Rect): Block => ({ ...b, h })
   fill(FARMER_BLOCKS, [
     ...BARN_WALLS.map(tall(TALL)),
@@ -267,7 +305,6 @@ export function setLand(ids: readonly SquareId[]) {
     ...gardens.flatMap((g) => g.fence).map(tall(0.75)),
     ...FENCE.map(tall(1.2)),
     ...hideys().map(hutRect).map(tall(HIDEY_H)),
-    ...hay.map(tall(HAY_H)),
   ])
 }
 

@@ -165,9 +165,9 @@ export class PigModel {
 
   /**
    * Poses the pig for its state. `moving` is how fast it is going (m/s), `t` the time in seconds,
-   * `phase` a per-pig offset so they don't all bob in step.
+   * `phase` a per-pig offset so they don't all bob in step. `droopy`: poorly, so a heavy head and a plod.
    */
-  pose(state: PigState, moving: number, t: number, phase: number) {
+  pose(state: PigState, moving: number, t: number, phase: number, droopy = false) {
     const b = this.body
     const h = this.head
     let y = 0
@@ -182,7 +182,7 @@ export class PigModel {
 
     if (moving > 0.2) {
       const fast = moving > 2
-      y = Math.abs(Math.sin(tt * (fast ? 22 : 12))) * (fast ? 0.06 : 0.025)
+      y = Math.abs(Math.sin(tt * (fast ? 22 : 12))) * (fast ? 0.06 : 0.025) * (droopy ? 0.4 : 1)
       tilt = fast ? 0.08 : 0
       this.feet.forEach((f, i) => (f.position.y = 0.03 + Math.max(0, Math.sin(tt * (fast ? 22 : 12) + (i % 2 ? Math.PI : 0))) * 0.04))
     } else {
@@ -218,6 +218,13 @@ export class PigModel {
         y += Math.abs(Math.sin(tt * 9)) * 0.12
         twist = Math.sin(tt * 9) * 0.3
         break
+      case 'mope':
+        // Slumped, head down, eyes half shut, slow sighing breaths.
+        headTilt = 0.3
+        headY = 0.18
+        squash = 0.9 + Math.sin(tt * 1.2) * 0.02
+        eyesOpen = 0.45
+        break
       case 'beg':
         tilt = -0.35
         headTilt = -0.2
@@ -241,6 +248,11 @@ export class PigModel {
         // A blink now and then.
         eyesOpen = (tt % 4) < 0.12 ? 0.15 : 1
         break
+    }
+    if (droopy && state !== 'sleep' && state !== 'mope') {
+      headTilt = Math.max(headTilt, 0.18)
+      headY = Math.min(headY, 0.21)
+      eyesOpen = Math.min(eyesOpen, 0.7)
     }
     b.position.y = y
     b.rotation.set(tilt, twist, roll)

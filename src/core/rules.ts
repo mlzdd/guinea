@@ -17,6 +17,8 @@ export const DAY_RAMP = 4
 export const NIGHT_START = 0.76
 /** A fresh farm starts in the morning. */
 export const START_TIME = 0.05
+/** Pigs sleep at their bed spots (BED_SPOTS in map.ts); only this many will doze off on a food pile instead. */
+export const FOOD_SLEEPERS = 2
 /** At night, once every pig is tucked up asleep in the barn for this long (and nothing's prowling), it's morning. */
 export const SLEEP_SKIP_MS = 3000
 
@@ -57,7 +59,7 @@ export const FARMER_ACCEL = 40
 export const FARMER_STOP = 28
 /** In the air you keep your momentum and can only steer this much. */
 export const AIR_ACCEL = 10
-/** Jumping (Space): about 1.6 m at the top, enough for the hay stacks. */
+/** Jumping (Space): about 1.6 m at the top, over fences and onto the hidey huts with room to spare. */
 export const JUMP_V = 8.9
 export const GRAVITY = 25
 /** How far outside the farm fence farmers can go. */
@@ -90,6 +92,10 @@ export const SACK_PELLETS = 40
  */
 export const HAY_RACK_MAX = 40
 export const HAY_ARMFUL = 20
+/** Hay goes in the basket: each armful takes this many places in it. */
+export const HAY_SLOTS = 2
+/** Armfuls a haystack in the stack yard can hold. */
+export const HAY_STACK_MAX = 6
 /** A cut patch of the hay meadow grows back in this long. */
 export const HAY_REGROW_MS = 120_000
 /** A pig that's had hay in the last day is this much less likely to get overgrown teeth (hay wears them down). */
@@ -125,6 +131,25 @@ export const SEEK_RADIUS = 14
 export const SNACKY = 85
 /** Chance, each time a pig picks what to do by day, that it goes on a snack trip: under an apple tree or to the garden fence. */
 export const SNACK_TRIP = 0.3
+/**
+ * Poorly piggies (hungry, glum, or with something wrong, even the hidden nails and teeth) go slow and mope about in
+ * corners, so you can tell who needs looking after.
+ */
+export const POORLY_HUNGER = 35
+export const POORLY_HAPPY = 35
+/** How fast they get about: wandering, going for food, running away. */
+export const POORLY_PACE = { walk: 0.55, food: 0.75, flee: 0.85 }
+export const poorly = (p: { hunger: number; happy: number; issues: number }) => p.hunger < POORLY_HUNGER || p.happy < POORLY_HAPPY || p.issues !== 0
+/**
+ * Herding: walk at a calm pig and it scoots away from you (along the way you're going), so you can steer them about
+ * (into the barn at dusk, say). Only a farmer on the move does it: stand still and they stay put to be picked up.
+ */
+export const HERD_RADIUS = 3
+/** A farmer moving at least this fast (m/s), roughly towards the pig. */
+export const HERD_SPEED = 2.5
+/** How far a pig scoots, and how fast. */
+export const HERD_STEP = 2.5
+export const PIG_SCOOT = 3.2
 /** Hungry pigs near a farmer with a full basket beg. */
 export const BEG_RADIUS = 5
 
@@ -285,7 +310,7 @@ export const JOB_KINDS = Object.keys(JOBS) as Stat[]
 
 // Breeding: now and then a happy, well-fed sow (with a boar about, and room in the barn) gets pregnant.
 /** Chance per day for each sow who's happy enough. Low, so the herd grows slowly. */
-export const PREGNANCY_PER_DAY = 0.05
+export const PREGNANCY_PER_DAY = 0.08
 export const PREGNANT_HAPPY = 60
 /** A pregnancy lasts this many days. */
 export const PREGNANCY_DAYS = 2

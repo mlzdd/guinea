@@ -11,8 +11,7 @@ import {
   DOOR_HALF,
   FENCE_EDGES,
   GARDENS,
-  HAY_BALES,
-  HAY_H,
+  HAY_STACKS,
   HAY_PATCHES,
   HAY_PATCH,
   HAY_RACKS,
@@ -36,7 +35,7 @@ import {
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BOWL_MAX, HAY_RACK_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
+import { BOWL_MAX, HAY_RACK_MAX, HAY_STACK_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 
 const WALL_H = 2.6
@@ -89,6 +88,39 @@ const strawTex = canvasTexture(
     }
   },
   6,
+)
+
+/** Standing hay seen from the side: close-packed vertical stalks in a few golds. */
+const strawSidesTex = canvasTexture(
+  128,
+  (g, s) => {
+    g.fillStyle = '#d9b85a'
+    g.fillRect(0, 0, s, s)
+    for (let i = 0; i < 500; i++) {
+      g.fillStyle = ['#c9a44a', '#e8cb72', '#b8933c', '#f0d888', '#a8853a'][i % 5]
+      const x = Math.random() * s
+      g.fillRect(x, Math.random() * s * 0.3, 1 + Math.random() * 1.5, s)
+    }
+    // A bit darker down at the roots.
+    const fade = g.createLinearGradient(0, 0, 0, s)
+    fade.addColorStop(0, 'rgba(0,0,0,0)')
+    fade.addColorStop(1, 'rgba(60,40,10,0.35)')
+    g.fillStyle = fade
+    g.fillRect(0, 0, s, s)
+  },
+  1,
+)
+strawSidesTex.repeat.set(3, 1)
+
+/** Standing hay from above: a thick tangle of stalk ends. */
+const strawTopTex = canvasTexture(
+  128,
+  (g, s) => {
+    g.fillStyle = '#d4b255'
+    g.fillRect(0, 0, s, s)
+    speckle(g, s, 1800, ['#c49f45', '#e6c96e', '#b08a36', '#f2dc90'], 2, 2)
+  },
+  2,
 )
 
 const dirtTex = canvasTexture(
@@ -264,17 +296,34 @@ interface Lerp {
   sunI: number
   hemiI: number
   lamps: number
+  /** How dark it is, 0..1: pulls the fog in and shades the screen edges. */
+  dark: number
 }
 /** Key moments of the day: time (0 = dawn) → lighting. */
 const RAIN_SKY = new THREE.Color(0x7d8794)
+const key = (sky: number, sun: number, sunI: number, hemiI: number, lamps: number, dark: number): Lerp => ({
+  sky: new THREE.Color(sky),
+  sun: new THREE.Color(sun),
+  sunI,
+  hemiI,
+  lamps,
+  dark,
+})
+const DAWN = key(0xf6b38a, 0xffc79a, 1.2, 1.4, 0.6, 0.25)
+const DAY = key(0x9fd3ff, 0xfff4e0, 2.4, 1.8, 0, 0)
+const NIGHT = key(0x0e1430, 0x8aa0ff, 0.3, 0.42, 1, 1)
+/** The evening comes on gradually: golden late afternoon, sunset, a purple dusk, then properly dark; a blue pre-dawn. */
 const KEYS: [number, Lerp][] = [
-  [0, { sky: new THREE.Color(0xf6b38a), sun: new THREE.Color(0xffc79a), sunI: 1.2, hemiI: 1.4, lamps: 0.6 }],
-  [0.08, { sky: new THREE.Color(0x9fd3ff), sun: new THREE.Color(0xfff4e0), sunI: 2.4, hemiI: 1.8, lamps: 0 }],
-  [0.62, { sky: new THREE.Color(0x9fd3ff), sun: new THREE.Color(0xfff4e0), sunI: 2.4, hemiI: 1.8, lamps: 0 }],
-  [NIGHT_START - 0.02, { sky: new THREE.Color(0xf0946a), sun: new THREE.Color(0xff9a6a), sunI: 1.4, hemiI: 1.3, lamps: 0.5 }],
-  [NIGHT_START + 0.04, { sky: new THREE.Color(0x24305a), sun: new THREE.Color(0x9ab0ff), sunI: 0.7, hemiI: 0.9, lamps: 1 }],
-  [0.96, { sky: new THREE.Color(0x24305a), sun: new THREE.Color(0x9ab0ff), sunI: 0.7, hemiI: 0.9, lamps: 1 }],
-  [1, { sky: new THREE.Color(0xf6b38a), sun: new THREE.Color(0xffc79a), sunI: 1.2, hemiI: 1.4, lamps: 0.6 }],
+  [0, DAWN],
+  [0.08, DAY],
+  [0.55, DAY],
+  [0.66, key(0xf3d6a0, 0xffd28a, 2.0, 1.6, 0, 0.05)],
+  [NIGHT_START - 0.03, key(0xf0946a, 0xff9a6a, 1.3, 1.2, 0.4, 0.2)],
+  [NIGHT_START + 0.02, key(0x5a4a80, 0xc0a0ff, 0.7, 0.75, 0.8, 0.55)],
+  [NIGHT_START + 0.06, NIGHT],
+  [0.95, NIGHT],
+  [0.985, key(0x3a4278, 0xb0b8ff, 0.6, 0.7, 0.9, 0.6)],
+  [1, DAWN],
 ]
 
 interface BedView {
@@ -320,7 +369,11 @@ export class World {
   private readonly binSacks: THREE.Mesh[] = []
   /** The hay meadow's patches: tall hay that's cut down to stubble and grows back. */
   private readonly hayPatches: THREE.Object3D[] = []
+  /** The haystacks in the stack yard, grown to how much hay is in each. */
+  private readonly stacks: THREE.Mesh[] = []
   private clock = 0
+  /** How dark it is right now (0 = broad daylight, 1 = the middle of the night). */
+  darkness = 0
   /** The two leaves of the low gate in the barn doorway, hinged at each side. */
   private readonly gate: THREE.Group[] = []
   private gateShut = false
@@ -375,13 +428,8 @@ export class World {
     this.buildGarden()
     this.buildOrchard()
     for (const h of HIDEYS) this.into(h).add(this.hidey(h.x, h.z))
-    const hay = new THREE.MeshLambertMaterial({ map: hayTex })
-    for (const b of HAY_BALES) {
-      // Stacked two high
-      for (let y = 0; y < 2; y++)
-        this.into(center(b)).add(boxMesh({ x0: b.x0 + y * 0.1, x1: b.x1 - y * 0.1, z0: b.z0 + y * 0.1, z1: b.z1 - y * 0.1 }, (y * HAY_H) / 2, HAY_H / 2, hay))
-    }
     this.buildMeadow()
+    this.buildStackYard()
     this.buildPond()
     this.buildFlowers()
     this.buildSurroundings()
@@ -483,22 +531,25 @@ export class World {
     return g
   }
 
-  /** The hay meadow: lusher, darker grass, and a field of patches of tall golden hay. */
+  /** The hay meadow: a field of patches of thick standing hay (on the same lawn as everywhere else). */
   private buildMeadow() {
-    const sq = SQUARES.find((x) => x.id === 'meadow')!
-    const lush = new THREE.Mesh(new THREE.PlaneGeometry(sq.x1 - sq.x0, sq.z1 - sq.z0), new THREE.MeshLambertMaterial({ map: grassTex, color: 0x9fd87a }))
-    lush.rotation.x = -Math.PI / 2
-    lush.position.set((sq.x0 + sq.x1) / 2, 0.012, (sq.z0 + sq.z1) / 2)
-    lush.receiveShadow = true
-    this.content.meadow.add(lush)
-
-    const stubble = new THREE.MeshLambertMaterial({ map: hayTex, color: 0xc8b070 })
-    const stalk = new THREE.ConeGeometry(0.16, 1, 4)
+    const stubble = new THREE.MeshLambertMaterial({ map: hayTex, color: 0xd8c27a })
+    // Each patch is packed tufts of hay (streaky straw down the sides, a speckled top), a little taller or shorter
+    // than their neighbours, with thin stalks poking up out of them so the top is ragged, not flat.
+    const sides = new THREE.MeshLambertMaterial({ map: strawSidesTex })
+    const top = new THREE.MeshLambertMaterial({ map: strawTopTex })
+    const tuft = new THREE.BoxGeometry(1, 1, 1)
+    tuft.translate(0, 0.5, 0)
+    const TUFTS = 5
+    const cell = HAY_PATCH / TUFTS
+    const stalk = new THREE.CylinderGeometry(0.012, 0.02, 1, 3)
     stalk.translate(0, 0.5, 0)
-    const golds = [mat(0xe0bf5c), mat(0xd4ad48), mat(0xeccf78)]
+    const golds = [mat(0xe2c162), mat(0xd6b452), mat(0xeccf7a)]
     let seed = 5
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
     const m4 = new THREE.Matrix4()
+    const q = new THREE.Quaternion()
+    const e = new THREE.Euler()
     for (const h of HAY_PATCHES) {
       const c = center(h)
       const ground = new THREE.Mesh(new THREE.PlaneGeometry(HAY_PATCH, HAY_PATCH), stubble)
@@ -506,27 +557,74 @@ export class World {
       ground.position.set(c.x, 0.02, c.z)
       ground.receiveShadow = true
       this.content.meadow.add(ground)
-      // The standing hay: lots of stalks, scaled down to stubble when it's been cut.
+      // The standing hay, scaled down to stubble when it's been cut.
       const tall = new THREE.Group()
       tall.position.set(c.x, 0, c.z)
+      const mass = new THREE.InstancedMesh(tuft, [sides, sides, top, stubble, sides, sides], TUFTS * TUFTS)
+      for (let i = 0; i < TUFTS * TUFTS; i++) {
+        const x = -HAY_PATCH / 2 + cell * ((i % TUFTS) + 0.5)
+        const z = -HAY_PATCH / 2 + cell * (Math.floor(i / TUFTS) + 0.5)
+        e.set((rnd() - 0.5) * 0.06, rnd() * 0.4, (rnd() - 0.5) * 0.06)
+        m4.compose(new THREE.Vector3(x, 0, z), q.setFromEuler(e), new THREE.Vector3(cell * 1.08, 0.68 + rnd() * 0.27, cell * 1.08))
+        mass.setMatrixAt(i, m4)
+      }
+      mass.castShadow = true
+      mass.receiveShadow = true
+      tall.add(mass)
       for (const gold of golds) {
-        const n = 22
+        const n = 150
         const inst = new THREE.InstancedMesh(stalk, gold, n)
         for (let i = 0; i < n; i++) {
-          const s = 0.7 + rnd() * 0.6
+          e.set((rnd() - 0.5) * 0.3, 0, (rnd() - 0.5) * 0.3)
           m4.compose(
-            new THREE.Vector3((rnd() - 0.5) * (HAY_PATCH - 0.3), 0, (rnd() - 0.5) * (HAY_PATCH - 0.3)),
-            new THREE.Quaternion().setFromEuler(new THREE.Euler((rnd() - 0.5) * 0.35, rnd() * 3, (rnd() - 0.5) * 0.35)),
-            new THREE.Vector3(s, 0.6 + rnd() * 0.5, s),
+            new THREE.Vector3((rnd() - 0.5) * HAY_PATCH, 0, (rnd() - 0.5) * HAY_PATCH),
+            q.setFromEuler(e),
+            new THREE.Vector3(1, 0.75 + rnd() * 0.45, 1),
           )
           inst.setMatrixAt(i, m4)
         }
-        inst.castShadow = true
         tall.add(inst)
       }
       this.content.meadow.add(tall)
       this.hayPatches.push(tall)
     }
+  }
+
+  /** The stack yard: a straw base for each haystack, and a sign. The stacks themselves grow with the hay put on them. */
+  private buildStackYard() {
+    const straw = new THREE.MeshLambertMaterial({ map: strawTex })
+    const hay = new THREE.MeshLambertMaterial({ map: strawTopTex })
+    const dome = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2)
+    for (const p of HAY_STACKS) {
+      const base = new THREE.Mesh(new THREE.CircleGeometry(1.3, 20), straw)
+      base.rotation.x = -Math.PI / 2
+      base.position.set(p.x, 0.025, p.z)
+      base.receiveShadow = true
+      this.content.meadow.add(base)
+      const stack = shadowed(new THREE.Mesh(dome, hay))
+      stack.position.set(p.x, 0, p.z)
+      stack.visible = false
+      this.content.meadow.add(stack)
+      this.stacks.push(stack)
+    }
+    const top = HAY_STACKS[0]
+    const sign = this.sign('Hay stacks', 2.2, 0.5)
+    sign.position.set(top.x, 1.5, top.z - 1.8)
+    const post = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.2, 0.12), mat(0x7a5232)))
+    post.position.y = -0.75
+    sign.add(post)
+    this.content.meadow.add(sign)
+  }
+
+  /** Armfuls in each haystack. */
+  setStacks(armfuls: number[]) {
+    armfuls.forEach((n, i) => {
+      const s = this.stacks[i]
+      if (!s) return
+      const k = n / HAY_STACK_MAX
+      s.visible = n > 0
+      s.scale.set(0.6 + 0.6 * k, 0.4 + 1.3 * k, 0.6 + 0.6 * k)
+    })
   }
 
   /** How grown each patch of hay is (0 = just cut, 1 = ready). */
@@ -1304,6 +1402,10 @@ export class World {
     this.sun.color.copy(a.sun).lerp(b.sun, k)
     this.sun.intensity = (a.sunI + (b.sunI - a.sunI) * k) * (1 - 0.55 * this.rainK)
     this.hemi.intensity = (a.hemiI + (b.hemiI - a.hemiI) * k) * (1 - 0.2 * this.rainK)
+    this.darkness = a.dark + (b.dark - a.dark) * k
+    const fog = this.scene.fog as THREE.Fog
+    fog.near = 60 - 32 * this.darkness
+    fog.far = 130 - 55 * this.darkness
     const lamps = a.lamps + (b.lamps - a.lamps) * k
     for (const l of this.lamps) l.intensity = lamps * 25
     this.lampBulbs.color.setScalar(0.5 + lamps * 0.5).multiply(new THREE.Color(0xffe6a0))

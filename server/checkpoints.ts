@@ -4,21 +4,23 @@ import type { Farm } from '../src/core/farm.ts'
 import { clockHours } from '../src/core/rules.ts'
 
 /**
- * Checkpoints: a copy of the farm every half hour of farm-clock time, so you can go back to one (`npm run restore`).
- * They come thick and fast (a farm half hour is ten seconds or so), so only the last KEEP are kept, plus the 6am one
- * of each of the last KEEP_DAWNS days.
+ * Checkpoints: a copy of the farm every EVERY_MIN minutes of farm-clock time, so you can go back to one
+ * (`npm run restore`). They come thick and fast (a few seconds apart), so only the last KEEP are kept (a whole farm
+ * day), plus the 6am one of each of the last KEEP_DAWNS days.
  */
-export const KEEP = 48
+export const EVERY_MIN = 10
+const PER_HOUR = 60 / EVERY_MIN
+export const KEEP = 24 * PER_HOUR
 export const KEEP_DAWNS = 14
 
-/** Which farm half hour it is: counts up through the days. */
-export const halfHour = (farm: Farm) => (farm.day - 1) * 48 + Math.floor((clockHours(farm.dayTime) - 6) * 2)
+/** Which farm ten minutes it is: counts up through the days. */
+export const slot = (farm: Farm) => (farm.day - 1) * 24 * PER_HOUR + Math.floor((clockHours(farm.dayTime) - 6) * PER_HOUR)
 
-/** e.g. day003-1430 (2:30pm on day 3), day003-0100 (1am, the night after day 3's daytime). */
+/** e.g. day003-1430 (2:30pm on day 3), day003-0110 (1:10am, the night after day 3's daytime). */
 export function checkpointName(farm: Farm) {
   const hours = clockHours(farm.dayTime)
   const h = Math.floor(hours) % 24
-  const m = Math.floor((hours % 1) * 2) * 30
+  const m = Math.floor((hours % 1) * PER_HOUR) * EVERY_MIN
   return `day${String(farm.day).padStart(3, '0')}-${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}`
 }
 
@@ -43,7 +45,7 @@ function order(name: string) {
   const m = /^day(\d+)-(\d\d)(\d\d)$/.exec(name)
   if (!m) return -1
   const h = Number(m[2]) + Number(m[3]) / 60
-  return Number(m[1]) * 48 + (h < 6 ? h + 24 : h) * 2
+  return Number(m[1]) * 24 * PER_HOUR + (h < 6 ? h + 24 : h) * PER_HOUR
 }
 
 export function writeCheckpoint(dir: string, farm: Farm) {
@@ -60,11 +62,11 @@ export function writeCheckpoint(dir: string, farm: Farm) {
   }
 }
 
-/** Call every tick: writes a checkpoint whenever the farm clock passes a half hour. */
+/** Call every tick: writes a checkpoint whenever the farm clock passes another EVERY_MIN minutes. */
 export function checkpointer(dir: string) {
   let last: number | null = null
   return (farm: Farm) => {
-    const now = halfHour(farm)
+    const now = slot(farm)
     if (last !== null && now !== last) writeCheckpoint(dir, farm)
     last = now
   }

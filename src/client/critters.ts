@@ -103,8 +103,9 @@ export class FarmerModel {
     this.sack.position.set(0, 0.85, -0.32)
     this.sack.rotation.x = 0.15
     r.add(this.sack)
-    // Or an armful of hay.
-    this.hay.position.set(0, 0.95, -0.35)
+    // Hay sticking up out of the basket.
+    this.hay.position.set(-0.45, 1.0, -0.05)
+    this.hay.scale.setScalar(0.5)
     r.add(this.hay)
 
     if (name) {
@@ -120,12 +121,12 @@ export class FarmerModel {
 
   /**
    * `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour;
-   * `carry` = a sack of pellets or an armful of hay; `airborne` = mid-jump. Sets the walking bob as root.position.y: add
-   * the feet height after.
+   * `sack` = a sack of pellets in its arms; `airborne` = mid-jump; `hay` = hay in the basket. Sets the walking bob as
+   * root.position.y: add the feet height after.
    */
-  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, carry: 'sack' | 'hay' | null = null, airborne = false) {
-    this.sack.visible = carry === 'sack'
-    this.hay.visible = carry === 'hay'
+  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false, airborne = false, hay = false) {
+    this.sack.visible = sack
+    this.hay.visible = hay && !holding
     this.walkPhase += dt * Math.min(speed, 9) * 2.2
     const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
     this.legs[0].rotation.x = swing

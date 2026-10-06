@@ -192,6 +192,24 @@ kbd {
   font-size: 26px;
 }
 
+#topbar {
+  transition: background 2s;
+}
+
+#topbar.night {
+  background: rgb(18 24 70 / 75%);
+  box-shadow: 0 0 18px rgb(140 160 255 / 35%);
+}
+
+/* Darkens the screen edges at night. */
+#nightshade {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 45%, rgb(5 8 30 / 60%) 100%);
+  pointer-events: none;
+}
+
 #stats {
   display: flex;
   gap: 16px;

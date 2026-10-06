@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, HAY_BALES, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, center, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
@@ -11,6 +11,7 @@ import {
   GRAVITY,
   GROW_MS,
   HERD_MAX,
+  ISSUE_BIT,
   LAND,
   LITTER,
   PAY,
@@ -19,10 +20,13 @@ import {
   RUN_SPEED,
   SALAD_BITES,
   SALAD_FROM,
+  TICK_MS,
+  SQUARE_IDS,
   WALK_SPEED,
   dayLength,
   farmDays,
   farmTime,
+  poorly,
   JOB_PAY,
   JUMP_V,
   JOBS_PER_DAY,
@@ -154,7 +158,7 @@ describe('emotes', () => {
 })
 
 describe('jumping', () => {
-  it('anything lower than your feet does not get in the way, and you can stand on huts and hay', () => {
+  it('anything lower than your feet does not get in the way, and you can stand on the huts', () => {
     setup()
     expect((JUMP_V * JUMP_V) / (2 * GRAVITY)).toBeGreaterThan(1.4) // high enough for the hay
     // The garden fence stops you on the ground, but not mid-jump.
@@ -171,7 +175,6 @@ describe('jumping', () => {
     // Huts and hay are somewhere to stand.
     expect(groundAt(HIDEYS[0])).toBe(HIDEY_H)
     expect(groundAt({ x: HIDEYS[0].x, z: HIDEYS[0].z + 2 })).toBe(0)
-    expect(groundAt(center(HAY_BALES[1]))).toBe(1.4)
     // Over the farm fence, but not far.
     const out = { x: BOUNDS.x1 + 3, z: 0 }
     settleFarmer(out, 0)
@@ -470,6 +473,23 @@ describe('land', () => {
     expect(run(farm, 30_000, () => pig.state === 'lost')).toBe(true)
   })
 
+  it('a shooed fox runs off and is gone once it is past the fence, whatever shape the farm is', () => {
+    // Foxes used to get stuck just outside the fence where their way out ran close to another square of the farm.
+    const lands = [['barn', 'yard'], ['barn', 'yard', 'garden'], ['barn', 'yard', 'garden', 'meadow'], ['barn', 'yard', 'orchard'], [...SQUARE_IDS]]
+    for (let seed = 1; seed <= 60; seed++) {
+      const { farm, id, me } = setup(seed, true)
+      farm.land = [...lands[seed % lands.length]] as typeof farm.land
+      farm.tick(50)
+      farm.spawnFox()
+      const fox = farm.preds[0]
+      run(farm, 2000 + (seed % 7) * 3000)
+      if (!farm.preds.includes(fox)) continue
+      Object.assign(me, { x: fox.x + 1, z: fox.z })
+      farm.handle(id, { t: 'shoo' })
+      expect(run(farm, 15_000, () => !farm.preds.includes(fox)), `seed ${seed}: fox left at ${fox.x.toFixed(1)},${fox.z.toFixed(1)}`).toBe(true)
+    }
+  })
+
   it('old saves are ignored: everyone starts small', () => {
     const { farm } = setup()
     const save = { ...JSON.parse(JSON.stringify(farm.save())), v: 1 }
@@ -499,6 +519,95 @@ describe('land', () => {
     Object.assign(p, { x: -22, z: 12.5, happy: 40, state: 'idle' })
     run(farm, 5000)
     expect(p.happy).toBeGreaterThan(41)
+  })
+})
+
+describe('poorly piggies', () => {
+  it('a hungry, glum or unwell pig is slow, and mopes about in corners and along the fence', () => {
+    expect(poorly({ hunger: 90, happy: 80, issues: 0 })).toBe(false)
+    expect(poorly({ hunger: 20, happy: 80, issues: 0 })).toBe(true)
+    expect(poorly({ hunger: 90, happy: 20, issues: 0 })).toBe(true)
+    expect(poorly({ hunger: 90, happy: 80, issues: ISSUE_BIT.nails })).toBe(true)
+
+    // Same walk, well and poorly: the poorly one gets less far.
+    const walked = (issues: number) => {
+      const { farm } = setup()
+      const p = lonePig(farm, -5, 0, 90)
+      Object.assign(p, { happy: 80, issues })
+      farm['walk'](p, { x: 5, z: 0 }, 'wander')
+      run(farm, 2000)
+      return p.x + 5
+    }
+    expect(walked(ISSUE_BIT.teeth)).toBeLessThan(walked(0) * 0.7)
+
+    // Left to it, a poorly pig spends its time moping, near the edge of things; a well one never does.
+    const mopes = (issues: number) => {
+      const { farm } = setup(1, true)
+      const p = lonePig(farm, 0, 0, 90)
+      Object.assign(p, { happy: 80, issues, until: 0 })
+      let moping = 0
+      let edge = 0
+      run(farm, 60_000, () => {
+        if (p.issues !== issues) p.issues = issues
+        if (p.state === 'mope') {
+          moping++
+          if (nearestFence(p).d < 2.5 || (isInside(p) && (Math.abs(p.x) > 8 || p.z < -22))) edge++
+        }
+        return false
+      })
+      return { moping, edge }
+    }
+    const sick = mopes(ISSUE_BIT.mites)
+    expect(sick.moping).toBeGreaterThan(200)
+    expect(sick.edge).toBeGreaterThan(sick.moping / 3)
+    expect(mopes(0).moping).toBe(0)
+  })
+})
+
+describe('herding', () => {
+  /** Walks the farmer along (as their browser would), a tick at a time. */
+  const walkTo = (farm: Farm, id: number, me: { x: number; z: number }, to: { x: number; z: number }, speed = 5) => {
+    for (let i = 0; i < 400; i++) {
+      const d = Math.hypot(to.x - me.x, to.z - me.z)
+      if (d < 0.1) return
+      const step = Math.min(d, (speed * TICK_MS) / 1000)
+      farm.handle(id, { t: 'state', x: me.x + ((to.x - me.x) / d) * step, y: 0, z: me.z + ((to.z - me.z) / d) * step, yaw: 0 })
+      farm.tick(TICK_MS)
+    }
+  }
+
+  it('walk at a calm pig and it scoots out of the way, along the way you are going; stand still and it stays put', () => {
+    const { farm, id, me } = setup()
+    const p = lonePig(farm, 0, 3, 95)
+    p.happy = 80
+    Object.assign(me, { x: -5, z: 3 })
+    farm.tick(TICK_MS)
+    walkTo(farm, id, me, { x: -1.5, z: 3 })
+    expect(p.state).toBe('scoot')
+    expect(p.tx).toBeGreaterThan(0.5) // off ahead of the farmer
+
+    const q = lonePig(farm, 0, 3, 95)
+    Object.assign(q, { happy: 80, state: 'idle', until: farm.t + 60_000 })
+    Object.assign(me, { x: -1.8, z: 3 })
+    run(farm, 2000)
+    expect(q.state).toBe('idle')
+    expect(q.x).toBe(0)
+  })
+
+  it('you can herd a pig in through the barn door', () => {
+    const { farm, id, me } = setup()
+    const p = lonePig(farm, 0.3, -5, 95)
+    Object.assign(p, { happy: 80, state: 'idle', until: farm.t + 600_000 })
+    Object.assign(me, { x: 0, z: 1 })
+    farm.tick(TICK_MS)
+    for (let i = 0; i < 6 && !isInside(p); i++) {
+      // Get round behind it, then walk it towards the door.
+      Object.assign(me, { x: p.x * 0.5, z: p.z + 4 })
+      farm.tick(TICK_MS)
+      walkTo(farm, id, me, { x: p.x * 0.3, z: Math.max(-9, p.z - 3) }, 4)
+      run(farm, 1500)
+    }
+    expect(isInside(p)).toBe(true)
   })
 })
 

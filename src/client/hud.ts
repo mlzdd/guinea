@@ -3,6 +3,7 @@ import type { AlertKind, DiaryRow, FarmerSnap, JobSnap, PigSnap, ServerMsg } fro
 import { SQUARES, canBuy } from '../core/map.ts'
 import {
   FARMER_COLORS,
+  HAY_SLOTS,
   ISSUE_BIT,
   clockHours,
   LAND,
@@ -71,8 +72,11 @@ export function mood(p: PigSnap): string {
   if (p.s === 'sleep') return 'fast asleep'
   if (p.s === 'eat') return 'munching'
   if (p.s === 'flee' || p.s === 'hide') return 'scared!'
+  if (p.s === 'scoot') return 'being herded'
+  if (p.s === 'mope') return p.hunger < 35 ? 'weak with hunger' : p.issues ? 'feeling poorly' : 'glum'
   if (p.hunger < 30) return 'starving!'
   if (p.hunger < 60) return 'hungry'
+  if (p.issues) return 'not looking well'
   if (p.happy > 80) return 'very happy'
   if (p.happy < 35) return 'grumpy'
   return 'content'
@@ -96,8 +100,15 @@ export class Hud {
     const hours = clockHours(time)
     const h = Math.floor(hours) % 24
     const m = Math.floor((hours % 1) * 60 / 10) * 10
-    const icon = time >= NIGHT_START ? '🌙' : time > NIGHT_START - 0.05 ? '🌇' : time < 0.04 ? '🌅' : '☀️'
-    $('clock').innerHTML = `${icon} <b>Day ${day}</b> · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    const night = time >= NIGHT_START
+    const icon = night ? '🌙' : time > NIGHT_START - 0.05 ? '🌇' : time < 0.04 ? '🌅' : '☀️'
+    $('clock').innerHTML = `${icon} <b>${night ? 'Night' : 'Day'} ${day}</b> · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    $('topbar').classList.toggle('night', night)
+  }
+
+  /** Shades the edges of the screen as it gets dark (0..1). */
+  setDarkness(dark: number) {
+    $('nightshade').style.opacity = String(Math.round(dark * 100) / 100)
   }
 
   setStats(pigs: PigSnap[], inside: number, total: number) {
@@ -201,14 +212,16 @@ export class Hud {
     if (kind === 'fox' || kind === 'hawk') this.toast(text, 'danger')
   }
 
-  setBasket(counts: number[], selected: number, max: number) {
-    const total = counts.reduce((a, b) => a + b, 0)
+  setBasket(counts: number[], selected: number, max: number, hay: number) {
+    const total = counts.reduce((a, b) => a + b, 0) + hay * HAY_SLOTS
     $('basket').innerHTML =
       VEGGIES.map(
         (v, i) =>
           `<div class="slot ${i === selected ? 'on' : ''} ${counts[i] ? '' : 'empty'}" title="${VEG_LABEL[v]}">` +
           `<small>${i + 1}</small><span>${VEG_ICON[v]}</span><b>${counts[i]}</b></div>`,
-      ).join('') + `<div class="total">🧺 ${total}/${max}</div>`
+      ).join('') +
+      (hay ? `<div class="slot hay" title="Hay (each armful takes ${HAY_SLOTS} places)"><span>🌾</span><b>${hay}</b></div>` : '') +
+      `<div class="total">🧺 ${total}/${max}</div>`
   }
 
   setCoins(coins: number) {

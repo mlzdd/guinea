@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { lonePig, ownAll, run, seeded, setup, veg } from './helpers.ts'
 import { Farm, HOPPER_ID, RACK_ID } from '../../src/core/farm.ts'
-import { BEDS, BOWLS, FEED_BIN, HAY_PATCHES, HAY_RACKS, HOPPERS, center, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
+import { BED_SPOTS, BEDS, BOWLS, SALAD_SPOT, FEED_BIN, HAY_PATCHES, HAY_RACKS, HAY_STACKS, HOPPERS, center, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
 import { parseClientMsg } from '../../src/core/protocol.ts'
 import {
   BASKET_MAX,
   BOWL_MAX,
   GROW_MS,
+  FOOD_SLEEPERS,
   HARVEST_YIELD,
   HAY_ARMFUL,
+  HAY_RACK_MAX,
+  HAY_SLOTS,
   HAY_REGROW_MS,
+  HAY_STACK_MAX,
   ISSUE_BIT,
   LOST_MS,
   NIGHT_START,
@@ -145,6 +149,7 @@ describe('garden', () => {
 
   it('apples fall in the orchard and can be gathered', () => {
     const { farm, id, me } = setup()
+    lonePig(farm, -30.3, -16, 100) // everyone else tucked away, so nobody eats the apples first
     run(farm, 61_000)
     const apple = [...farm.foods.values()].find((f) => f.kind === 'apple')!
     expect(apple).toBeDefined()
@@ -156,11 +161,12 @@ describe('garden', () => {
 
   it('pigs trot over for an apple even when they are not hungry', () => {
     const { farm } = setup()
+    lonePig(farm, -30.3, -16, 100)
     run(farm, 61_000)
     const apple = [...farm.foods.values()].find((f) => f.kind === 'apple')!
     const p = lonePig(farm, apple.x - 4, apple.z, 75)
     p.until = 0
-    expect(run(farm, 10_000, () => p.state === 'eat' && p.food === apple.id)).toBe(true)
+    expect(run(farm, 10_000, () => p.state === 'eat' && farm.foods.get(p.food!)?.kind === 'apple')).toBe(true)
   })
 
   it('pigs go on snack trips: nibbling under the apple trees and wheeking at ripe veg through the garden fence', () => {
@@ -319,6 +325,26 @@ describe('day and night', () => {
     expect(run(farm, 60_000, () => farm.day === 2)).toBe(true)
     expect(farm.out.some((o) => o.msg.t === 'alert' && o.msg.text.includes('fast asleep'))).toBe(true)
     expect(farm.out.some((o) => o.msg.t === 'report')).toBe(true)
+  })
+
+  it('pigs sleep tucked up round the edges of the barn, not in the middle (a couple on the food piles at most)', () => {
+    const { farm } = setup(5)
+    farm.t = farmTime(NIGHT_START) + 1000
+    for (const p of farm.pigs)
+      Object.assign(p, { x: -4 + (p.id % 5) * 2, z: -19 + Math.floor(p.id / 5) * 1.5, hunger: 90, state: 'idle', until: farm.t + 100 })
+    // Where they all were the moment the night was skipped (everyone tucked up).
+    let last: { x: number; z: number; state: string }[] = []
+    expect(
+      run(farm, 90_000, () => {
+        if (farm.night) last = farm.pigs.map(({ x, z, state }) => ({ x, z, state }))
+        return farm.day === 2
+      }),
+    ).toBe(true)
+    const asleep = last.filter((p) => p.state === 'sleep')
+    expect(asleep.length).toBeGreaterThan(farm.pigs.length / 2)
+    const astray = asleep.filter((p) => !BED_SPOTS.some((b) => dist(p, b) < 1.3))
+    expect(astray.length).toBeLessThanOrEqual(FOOD_SLEEPERS)
+    for (const p of astray) expect([...BOWLS, ...HOPPERS, SALAD_SPOT].some((f) => dist(p, f) < 1.5)).toBe(true)
   })
 
   it('the night is not skipped while a pig is still up, or a fox is about', () => {
@@ -482,33 +508,37 @@ describe('pellets', () => {
 })
 
 describe('hay', () => {
-  it('farmers cut armfuls of hay in the hay meadow and take them to the racks, and pigs eat it', () => {
+  it('farmers cut armfuls of hay into their basket and take them to the racks, and pigs eat it', () => {
     const { farm, id, me } = setup()
     const rack = farm.foods.get(RACK_ID)!
     expect(rack.bites).toBe(0)
     Object.assign(me, center(HAY_PATCHES[0]))
     farm.handle(id, { t: 'hay', patch: 1 }) // not standing on that one
-    expect(me.hay).toBe(false)
+    expect(me.hay).toBe(0)
     farm.handle(id, { t: 'hay', patch: 0 })
-    expect(me.hay).toBe(true)
+    expect(me.hay).toBe(1)
     expect(farm.snapshot().hayField[0]).toBe(0)
-    expect(farm.snapshot().farmers[0].hay).toBe(true)
-    // Hands full.
+    expect(farm.snapshot().farmers[0].hay).toBe(1)
+    // In the basket, not your hands: you can still throw veg; it takes two places in the basket.
     me.basket[0] = 1
-    farm.handle(id, { t: 'throw', veg: 'carrot', x: 0, z: -15 })
-    expect(me.basket[0]).toBe(1)
-    farm.handle(id, { t: 'sack' })
-    expect(me.sack).toBe(false)
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: -20, z: -10 })
+    expect(me.basket[0]).toBe(0)
+    expect(farm.basketCount(me)).toBe(HAY_SLOTS)
+    // Several armfuls, one from each patch.
+    Object.assign(me, center(HAY_PATCHES[1]))
+    farm.handle(id, { t: 'hay', patch: 1 })
+    expect(me.hay).toBe(2)
 
     const pig = lonePig(farm, HAY_RACKS[0].x, -19, 40)
     Object.assign(me, { x: HAY_RACKS[0].x, z: HAY_RACKS[0].z + 1.5 })
     farm.handle(id, { t: 'rack', rack: 0 })
-    expect(me.hay).toBe(false)
-    expect(rack.bites).toBe(HAY_ARMFUL)
-    expect(farm.snapshot().racks[0]).toBe(HAY_ARMFUL)
+    // Both go in (the rack holds two armfuls).
+    expect(me.hay).toBe(0)
+    expect(rack.bites).toBe(2 * HAY_ARMFUL)
+    expect(farm.snapshot().racks[0]).toBe(2 * HAY_ARMFUL)
     expect(run(farm, 8000, () => pig.state === 'eat' && pig.food === RACK_ID)).toBe(true)
     run(farm, 3000)
-    expect(rack.bites).toBeLessThan(HAY_ARMFUL)
+    expect(rack.bites).toBeLessThan(2 * HAY_ARMFUL)
     expect(pig.hayAt).toBeGreaterThan(0)
 
     // Paid for in the morning.
@@ -519,36 +549,74 @@ describe('hay', () => {
     expect(report.lines.find((l) => l.label.includes('Hay'))?.coins).toBe(1)
   })
 
-  it('a cut patch grows back before it can be cut again; there are plenty of patches', () => {
+  it('as much hay as the basket holds (two places an armful), and a full rack takes no more', () => {
+    const { farm, id, me } = setup()
+    for (let patch = 0; patch < 10; patch++) {
+      Object.assign(me, center(HAY_PATCHES[patch]))
+      farm.handle(id, { t: 'hay', patch })
+    }
+    expect(me.hay).toBe(BASKET_MAX / HAY_SLOTS)
+    expect(farm.snapshot().hayField[9]).toBe(1) // that one wasn't cut: no room
+    Object.assign(me, { x: HAY_RACKS[2].x, z: HAY_RACKS[2].z + 1.5 })
+    farm.handle(id, { t: 'rack', rack: 2 })
+    expect(farm.foods.get(RACK_ID + 2)!.bites).toBe(HAY_RACK_MAX)
+    expect(me.hay).toBe(BASKET_MAX / HAY_SLOTS - HAY_RACK_MAX / HAY_ARMFUL)
+    farm.handle(id, { t: 'rack', rack: 2 })
+    expect(me.hay).toBe(BASKET_MAX / HAY_SLOTS - HAY_RACK_MAX / HAY_ARMFUL)
+  })
+
+  it('a cut patch grows back before it can be cut again', () => {
     const { farm, id, me } = setup()
     expect(HAY_PATCHES.length).toBeGreaterThanOrEqual(12)
     Object.assign(me, center(HAY_PATCHES[3]))
     farm.handle(id, { t: 'hay', patch: 3 })
-    // Put it back: the patch is as it was.
     farm.handle(id, { t: 'hay', patch: 3 })
-    expect(me.hay).toBe(false)
-    expect(farm.snapshot().hayField[3]).toBe(1)
-    farm.handle(id, { t: 'hay', patch: 3 })
-    Object.assign(me, { x: HAY_RACKS[0].x, z: HAY_RACKS[0].z + 1.5 })
-    farm.handle(id, { t: 'rack', rack: 0 })
-    Object.assign(me, center(HAY_PATCHES[3]))
-    farm.handle(id, { t: 'hay', patch: 3 })
-    expect(me.hay).toBe(false) // still stubble
+    expect(me.hay).toBe(1) // still stubble
     run(farm, HAY_REGROW_MS / 2)
     expect(farm.snapshot().hayField[3]).toBeCloseTo(0.5, 1)
     run(farm, HAY_REGROW_MS / 2 + 100)
     farm.handle(id, { t: 'hay', patch: 3 })
-    expect(me.hay).toBe(true)
+    expect(me.hay).toBe(2)
     // Saved and loaded mid-regrow.
     const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
     expect(again.snapshot().hayField[3]).toBe(0)
+  })
+
+  it('cut hay is stacked up in the stack yard and taken to the racks later', () => {
+    const { farm, id, me } = setup()
+    for (const patch of [0, 1, 2]) {
+      Object.assign(me, center(HAY_PATCHES[patch]))
+      farm.handle(id, { t: 'hay', patch })
+    }
+    expect(me.hay).toBe(3)
+    Object.assign(me, { x: HAY_STACKS[1].x + 1, z: HAY_STACKS[1].z })
+    farm.handle(id, { t: 'stack', stack: 1 })
+    expect(me.hay).toBe(0)
+    expect(farm.snapshot().stacks[1]).toBe(3)
+    // Not from over here.
+    farm.handle(id, { t: 'stack', stack: 0 })
+    expect(me.hay).toBe(0)
+    // Take it back off: as much as fits in the basket.
+    me.basket = [0, 0, 0, 0, BASKET_MAX - HAY_SLOTS * 2]
+    farm.handle(id, { t: 'stack', stack: 1 })
+    expect(me.hay).toBe(2)
+    expect(farm.hayStacks[1]).toBe(1)
+    // A stack only holds so much: the rest stays in your basket.
+    farm.hayStacks[0] = HAY_STACK_MAX - 1
+    Object.assign(me, { x: HAY_STACKS[0].x + 1, z: HAY_STACKS[0].z })
+    farm.handle(id, { t: 'stack', stack: 0 })
+    expect(farm.hayStacks[0]).toBe(HAY_STACK_MAX)
+    expect(me.hay).toBe(1)
+    // Saved.
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.hayStacks).toEqual([HAY_STACK_MAX, 1, 0])
   })
 
   it('no hay meadow, no hay', () => {
     const { farm, id, me } = setup(1, true)
     Object.assign(me, center(HAY_PATCHES[0]))
     farm.handle(id, { t: 'hay', patch: 0 })
-    expect(me.hay).toBe(false)
+    expect(me.hay).toBe(0)
   })
 
   it('hay keeps teeth healthy', () => {

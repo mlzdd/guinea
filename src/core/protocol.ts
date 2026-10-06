@@ -1,4 +1,4 @@
-import { BEDS, BOWLS, HAY_PATCHES, HAY_RACKS, HOPPERS } from './map.ts'
+import { BEDS, BOWLS, HAY_PATCHES, HAY_RACKS, HAY_STACKS, HOPPERS } from './map.ts'
 import type { PigLook } from './pigs.ts'
 import { EMOTES, FARMER_COLORS, ISSUES, SQUARE_IDS, UPGRADE_IDS, VEGGIES, type Issue, type SquareId, type Stat, type UpgradeId, type Veg } from './rules.ts'
 
@@ -16,6 +16,10 @@ export type PigState =
   | 'popcorn'
   /** Zoomies: racing about when the zoomometer fills up. */
   | 'zoom'
+  /** Poorly: sitting about in a corner, glum. */
+  | 'mope'
+  /** Being herded: scooting out of a farmer's way. */
+  | 'scoot'
   | 'scratch'
   | 'sneeze'
   | 'held'
@@ -37,9 +41,10 @@ export interface FarmerSnap {
   /** Count of each veg, in VEGGIES order. */
   basket: number[]
   holding: number | null
-  /** Carrying a sack of pellets, or an armful of hay. */
+  /** Carrying a sack of pellets (hands full). */
   sack: boolean
-  hay: boolean
+  /** Armfuls of hay in the basket (each takes HAY_SLOTS places). */
+  hay: number
 }
 
 export interface PigSnap {
@@ -110,6 +115,8 @@ export type ClientMsg =
   | { t: 'pour'; hopper: number }
   /** On a patch of the hay meadow: cut an armful (or put it back). */
   | { t: 'hay'; patch: number }
+  /** At a haystack in the stack yard: add your armful to it, or take one off. */
+  | { t: 'stack'; stack: number }
   | { t: 'rack'; rack: number }
   | { t: 'buy'; upgrade: UpgradeId }
   /** Buy a square of land. */
@@ -151,6 +158,8 @@ export type ServerMsg =
       /** Hay in each rack (bites), and how grown each patch of the hay meadow is (0..1, 1 = ready to cut). */
       racks: number[]
       hayField: number[]
+      /** Armfuls in each haystack in the stack yard. */
+      stacks: number[]
       preds: PredSnap[]
       /** The farm's shared wallet, and what it has bought. */
       coins: number
@@ -241,6 +250,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return isIndex(o.e, EMOTES.length) ? { t: 'emote', e: o.e } : null
     case 'hay':
       return isIndex(o.patch, HAY_PATCHES.length) ? { t: 'hay', patch: o.patch } : null
+    case 'stack':
+      return isIndex(o.stack, HAY_STACKS.length) ? { t: 'stack', stack: o.stack } : null
     case 'adopt':
     case 'salad':
     case 'serve':

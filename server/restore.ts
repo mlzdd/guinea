@@ -20,7 +20,7 @@ const listening = (port: number) =>
 const all = listCheckpoints(DIR)
 const want = process.argv[2]
 if (!want) {
-  if (!all.length) console.log('No checkpoints yet: they\'re written every half hour of farm time while someone\'s playing.')
+  if (!all.length) console.log('No checkpoints yet: they\'re written every 10 farm minutes while someone\'s playing.')
   else {
     console.log('Checkpoints, newest first (day, then farm time):\n')
     for (const c of all) console.log(`  ${c.name}    saved ${new Date(c.time).toLocaleString()}`)
