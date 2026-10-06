@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { mat } from './veg.ts'
-import { makeSack } from './world.ts'
+import { makeHay, makeSack } from './world.ts'
 
 const box = new THREE.BoxGeometry(1, 1, 1)
 const sphere = new THREE.SphereGeometry(1, 14, 10)
@@ -61,6 +61,7 @@ export class FarmerModel {
   private readonly basket = new THREE.Group()
   private readonly basketFill: THREE.Mesh
   private readonly sack = makeSack()
+  private readonly hay = makeHay()
   private throwT = 1
   private walkPhase = 0
 
@@ -102,6 +103,9 @@ export class FarmerModel {
     this.sack.position.set(0, 0.85, -0.32)
     this.sack.rotation.x = 0.15
     r.add(this.sack)
+    // Or an armful of hay.
+    this.hay.position.set(0, 0.95, -0.35)
+    r.add(this.hay)
 
     if (name) {
       const tag = textSprite(name)
@@ -116,10 +120,12 @@ export class FarmerModel {
 
   /**
    * `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour;
-   * `airborne` = mid-jump. Sets the walking bob as root.position.y: add the feet height after.
+   * `carry` = a sack of pellets or an armful of hay; `airborne` = mid-jump. Sets the walking bob as root.position.y: add
+   * the feet height after.
    */
-  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false, airborne = false) {
-    this.sack.visible = sack
+  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, carry: 'sack' | 'hay' | null = null, airborne = false) {
+    this.sack.visible = carry === 'sack'
+    this.hay.visible = carry === 'hay'
     this.walkPhase += dt * Math.min(speed, 9) * 2.2
     const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
     this.legs[0].rotation.x = swing

@@ -4,6 +4,7 @@ import { SQUARES, canBuy } from '../core/map.ts'
 import {
   FARMER_COLORS,
   ISSUE_BIT,
+  clockHours,
   LAND,
   NIGHT_START,
   SHOP_TABS,
@@ -92,8 +93,7 @@ export class Hud {
   }
 
   setClock(day: number, time: number) {
-    // 0 = dawn = 6am; night falls at NIGHT_START (~8pm) and dawn is 6am again.
-    const hours = time < NIGHT_START ? 6 + (time / NIGHT_START) * 14 : 20 + ((time - NIGHT_START) / (1 - NIGHT_START)) * 10
+    const hours = clockHours(time)
     const h = Math.floor(hours) % 24
     const m = Math.floor((hours % 1) * 60 / 10) * 10
     const icon = time >= NIGHT_START ? '🌙' : time > NIGHT_START - 0.05 ? '🌇' : time < 0.04 ? '🌅' : '☀️'

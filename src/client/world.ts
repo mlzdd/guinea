@@ -13,6 +13,9 @@ import {
   GARDENS,
   HAY_BALES,
   HAY_H,
+  HAY_PATCHES,
+  HAY_PATCH,
+  HAY_RACKS,
   HIDEYS,
   HIDEY_D,
   HIDEY_H,
@@ -33,7 +36,7 @@ import {
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BOWL_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
+import { BOWL_MAX, HAY_RACK_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 
 const WALL_H = 2.6
@@ -199,6 +202,23 @@ const sackTex = canvasTexture(
   1,
 )
 
+/** An armful of hay: a scruffy bundle. */
+export function makeHay(): THREE.Group {
+  const g = new THREE.Group()
+  const m = new THREE.MeshLambertMaterial({ map: hayTex })
+  for (const [x, y, z, s] of [
+    [0, 0, 0, 0.32],
+    [0.15, 0.08, 0.05, 0.22],
+    [-0.14, 0.06, -0.04, 0.24],
+  ]) {
+    const tuft = shadowed(new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), m))
+    tuft.position.set(x, y, z)
+    tuft.scale.set(s * 1.3, s * 0.8, s)
+    g.add(tuft)
+  }
+  return g
+}
+
 /** A sack of pellets (on the feed bin, or in a farmer's arms). */
 export function makeSack(): THREE.Mesh {
   const geo = new THREE.BoxGeometry(0.5, 0.6, 0.3)
@@ -295,6 +315,11 @@ export class World {
   private readonly saladServed = new THREE.Group()
   private saladKey = ''
   private saladFloor: THREE.Group | null = null
+  /** Hay in each rack (and the bit on the floor in front that pigs eat), and the sacks on the feed bin. */
+  private readonly racks: { hay: THREE.Mesh; floor: THREE.Mesh }[] = []
+  private readonly binSacks: THREE.Mesh[] = []
+  /** The hay meadow's patches: tall hay that's cut down to stubble and grows back. */
+  private readonly hayPatches: THREE.Object3D[] = []
   private clock = 0
   /** The two leaves of the low gate in the barn doorway, hinged at each side. */
   private readonly gate: THREE.Group[] = []
@@ -458,7 +483,7 @@ export class World {
     return g
   }
 
-  /** The hay meadow: lusher, darker grass. */
+  /** The hay meadow: lusher, darker grass, and a field of patches of tall golden hay. */
   private buildMeadow() {
     const sq = SQUARES.find((x) => x.id === 'meadow')!
     const lush = new THREE.Mesh(new THREE.PlaneGeometry(sq.x1 - sq.x0, sq.z1 - sq.z0), new THREE.MeshLambertMaterial({ map: grassTex, color: 0x9fd87a }))
@@ -466,6 +491,50 @@ export class World {
     lush.position.set((sq.x0 + sq.x1) / 2, 0.012, (sq.z0 + sq.z1) / 2)
     lush.receiveShadow = true
     this.content.meadow.add(lush)
+
+    const stubble = new THREE.MeshLambertMaterial({ map: hayTex, color: 0xc8b070 })
+    const stalk = new THREE.ConeGeometry(0.16, 1, 4)
+    stalk.translate(0, 0.5, 0)
+    const golds = [mat(0xe0bf5c), mat(0xd4ad48), mat(0xeccf78)]
+    let seed = 5
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+    const m4 = new THREE.Matrix4()
+    for (const h of HAY_PATCHES) {
+      const c = center(h)
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(HAY_PATCH, HAY_PATCH), stubble)
+      ground.rotation.x = -Math.PI / 2
+      ground.position.set(c.x, 0.02, c.z)
+      ground.receiveShadow = true
+      this.content.meadow.add(ground)
+      // The standing hay: lots of stalks, scaled down to stubble when it's been cut.
+      const tall = new THREE.Group()
+      tall.position.set(c.x, 0, c.z)
+      for (const gold of golds) {
+        const n = 22
+        const inst = new THREE.InstancedMesh(stalk, gold, n)
+        for (let i = 0; i < n; i++) {
+          const s = 0.7 + rnd() * 0.6
+          m4.compose(
+            new THREE.Vector3((rnd() - 0.5) * (HAY_PATCH - 0.3), 0, (rnd() - 0.5) * (HAY_PATCH - 0.3)),
+            new THREE.Quaternion().setFromEuler(new THREE.Euler((rnd() - 0.5) * 0.35, rnd() * 3, (rnd() - 0.5) * 0.35)),
+            new THREE.Vector3(s, 0.6 + rnd() * 0.5, s),
+          )
+          inst.setMatrixAt(i, m4)
+        }
+        inst.castShadow = true
+        tall.add(inst)
+      }
+      this.content.meadow.add(tall)
+      this.hayPatches.push(tall)
+    }
+  }
+
+  /** How grown each patch of hay is (0 = just cut, 1 = ready). */
+  setHayField(grown: number[]) {
+    grown.forEach((g, i) => {
+      const p = this.hayPatches[i]
+      if (p) p.scale.y = 0.08 + 0.92 * g
+    })
   }
 
   /** The pond: water, stones round the edge, and a couple of ducks paddling about. */
@@ -607,14 +676,25 @@ export class World {
     }
     s.add(this.roof)
 
-    // Inside: hay racks along the back wall, water bottles, little pig houses, food bowls.
+    // Inside: hay racks along the back wall (filled from the hay meadow), water bottles, little pig houses, food bowls.
     const hay = new THREE.MeshLambertMaterial({ map: hayTex })
-    for (const x of [-8, 0, 8]) {
-      const rack = shadowed(new THREE.Mesh(new THREE.BoxGeometry(3, 0.6, 0.5), mat(0x8a5a2b)))
-      rack.position.set(x, 0.5, BARN_IN.z0 + 0.3)
-      const top = shadowed(new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.4, 0.4), hay))
-      top.position.set(x, 0.95, BARN_IN.z0 + 0.3)
-      s.add(rack, top)
+    const slats = mat(0x8a5a2b)
+    for (const r of HAY_RACKS) {
+      const back = shadowed(new THREE.Mesh(new THREE.BoxGeometry(3, 0.9, 0.08), slats))
+      back.position.set(r.x, 0.6, r.z - 0.2)
+      s.add(back)
+      for (let i = 0; i < 7; i++) {
+        const bar = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.7, 0.05), slats))
+        bar.position.set(r.x - 1.4 + (i * 2.8) / 6, 0.65, r.z + 0.15)
+        bar.rotation.x = -0.25
+        s.add(bar)
+      }
+      const inRack = shadowed(new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.6, 0.3), hay))
+      inRack.position.set(r.x, 0.6, r.z)
+      const floor = shadowed(new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 0.5), hay))
+      floor.position.set(r.x, 0.06, r.z + 0.5)
+      s.add(inRack, floor)
+      this.racks.push({ hay: inRack, floor })
     }
     const bottleMat = new THREE.MeshLambertMaterial({ color: 0x8fd0ff, transparent: true, opacity: 0.7 })
     for (const x of [-4, 4]) {
@@ -1027,15 +1107,16 @@ export class World {
     const chest = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 0.7), wood))
     chest.position.y = 0.3
     bin.add(chest)
+    // Today's ration: one sack per hopper.
     for (const [x, z, r] of [
-      [-0.35, 0, 0.1],
-      [0.1, 0.05, -0.15],
-      [0.5, -0.05, 0.2],
+      [-0.3, 0, 0.1],
+      [0.35, 0.05, -0.15],
     ]) {
       const sack = makeSack()
       sack.position.set(x, 0.6, z)
       sack.rotation.y = r
       bin.add(sack)
+      this.binSacks.push(sack)
     }
     s.add(bin)
   }
@@ -1147,6 +1228,21 @@ export class World {
     for (const sq of SQUARES) this.sprinklers[sq.id].visible = owned.includes('sprinkler') && this.land.includes(sq.id)
     // Bigger hoppers are taller.
     for (const h of this.hoppers) h.body.scale.y = owned.includes('bighopper') ? 1.4 : 1
+  }
+
+  setRacks(bites: number[]) {
+    bites.forEach((n, i) => {
+      const k = Math.max(0, Math.min(1, n / HAY_RACK_MAX))
+      const r = this.racks[i]
+      r.hay.visible = k > 0
+      r.hay.scale.y = Math.max(0.05, k)
+      r.hay.position.y = 0.3 + 0.3 * k
+      r.floor.visible = n > 0
+    })
+  }
+
+  setSacks(n: number) {
+    this.binSacks.forEach((s, i) => (s.visible = i < n))
   }
 
   setHoppers(bites: number[], max: number) {

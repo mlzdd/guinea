@@ -76,6 +76,12 @@ export const HOPPERS: P[] = [
   { x: -10, z: -18.6 },
   { x: 10, z: -18.6 },
 ]
+/** Hay racks along the back wall: farmers fill them with hay from the hay meadow; pigs eat from the floor in front. */
+export const HAY_RACKS: P[] = [
+  { x: -8, z: -24.4 },
+  { x: 0, z: -24.4 },
+  { x: 8, z: -24.4 },
+]
 /** Where the sacks of pellets are kept, just inside the door. */
 export const FEED_BIN: P = { x: 5, z: -11.4 }
 /** The salad station, the other side of the door: farmers build the evening salad platter here… */
@@ -153,7 +159,7 @@ const trunks = TREES.map((t) => r(t.x - TRUNK, t.x + TRUNK, t.z - TRUNK, t.z + T
 export const HIDEYS: (P & { square: SquareId })[] = [
   { x: -8, z: 1, square: 'yard' },
   { x: 6, z: -3, square: 'yard' },
-  { x: -21, z: -13, square: 'meadow' },
+  { x: -14, z: -22, square: 'meadow' },
   { x: -1, z: 12, square: 'huts' },
   { x: -8, z: 19, square: 'huts' },
   { x: 7, z: 19, square: 'huts' },
@@ -165,9 +171,16 @@ export const HIDEY_D = 1.4
 export const HIDEY_H = 1.1
 const hutRect = (h: P) => r(h.x - HIDEY_W / 2, h.x + HIDEY_W / 2, h.z - HIDEY_D / 2, h.z + HIDEY_D / 2)
 
-/** Stacked hay bales in the hay meadow, for looks, a bit of cover and climbing. */
-export const HAY_BALES: Rect[] = [r(-15.5, -13.5, -24.5, -21), r(-29, -27, -13, -10.5), r(-22, -19.5, -20, -18)]
+/** Stacked hay bales in the corners of the hay meadow, for looks, a bit of cover and climbing. */
+export const HAY_BALES: Rect[] = [r(-31, -29, -25, -21.5), r(-15, -13, -12.2, -9.5)]
 export const HAY_H = 1.4
+/** The hay meadow's field: a grid of patches of tall hay. Cut an armful from one and it grows back. */
+export const HAY_PATCH = 2.8
+export const HAY_PATCHES: Rect[] = [-22.5, -18.5, -14.5, -10.5].flatMap((z) =>
+  [-27.5, -24, -20.5, -17].map((x) => r(x - HAY_PATCH / 2, x + HAY_PATCH / 2, z - HAY_PATCH / 2, z + HAY_PATCH / 2)),
+)
+/** The patch you're standing on (or right next to), if any. */
+export const hayPatchAt = (p: P) => HAY_PATCHES.findIndex((h) => inRect(p, h, 0.6))
 
 /** The pond: water nobody walks on. Pigs resting nearby (POND_CALM) get happier. */
 export const POND = r(-27, -17, 14, 20)

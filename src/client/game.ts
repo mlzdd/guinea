@@ -1,11 +1,12 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HOPPERS, SALAD_TABLE, dist, groundAt, inRect, isInside, setLand } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_RACKS, HOPPERS, SALAD_TABLE, dist, groundAt, hayPatchAt, inRect, isInside, setLand } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
   BOWL_MAX,
   EMOTES,
   FARMER_COLORS,
+  HAY_RACK_MAX,
   LAND,
   PUP_DAYS,
   REACH,
@@ -246,6 +247,14 @@ export class Game {
     return this.mySnap()?.sack ?? false
   }
 
+  private hasHay(): boolean {
+    return this.mySnap()?.hay ?? false
+  }
+
+  private carrying(f: { sack: boolean; hay: boolean } | undefined) {
+    return f?.sack ? 'sack' : f?.hay ? 'hay' : null
+  }
+
   private holding(): number | null {
     return this.mySnap()?.holding ?? null
   }
@@ -406,6 +415,9 @@ export class Game {
     this.world.setBowls(snap.bowls)
     this.world.setSalad(snap.salad.veg, snap.salad.bites)
     this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
+    this.world.setRacks(snap.racks)
+    this.world.setHayField(snap.hayField)
+    this.world.setSacks(snap.sacks)
     // The map's fences and solids follow the farm's land, for walking about here too.
     setLand(snap.land)
     this.world.setLand(snap.land)
@@ -482,6 +494,10 @@ export class Game {
       this.hud.toast('Pour that sack into a hopper first (E)')
       return
     }
+    if (this.hasHay()) {
+      this.hud.toast('Put that hay in a rack in the barn first (E)')
+      return
+    }
     const basket = this.basket()
     if (basket[this.selected] <= 0) {
       const other = basket.findIndex((n) => n > 0)
@@ -532,8 +548,8 @@ export class Game {
     mine.root.rotation.y = this.me.yaw
     const basket = this.basket()
     const top = basket.findLastIndex((n) => n > 0)
-    const sack = this.hasSack()
-    mine.pose(dt, airborne ? 0 : this.me.speed, holding !== null || sack, basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack, airborne)
+    const carry = this.carrying(this.mySnap())
+    mine.pose(dt, airborne ? 0 : this.me.speed, holding !== null || carry !== null, basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], carry, airborne)
     mine.root.position.y += this.me.y
 
     if (performance.now() - this.lastSend > SEND_MS) {
@@ -601,7 +617,8 @@ export class Game {
       v.model.root.rotation.y = v.yaw
       const top = s.basket.findLastIndex((n) => n > 0)
       const airborne = v.y > groundAt(v) + 0.05
-      v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || s.sack, s.basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, airborne)
+      const carry = this.carrying(s)
+      v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || carry !== null, s.basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], carry, airborne)
       v.model.root.position.y += v.y
     }
   }
@@ -828,6 +845,7 @@ export class Game {
     }
 
     const sack = this.hasSack()
+    const hay = this.hasHay()
     const max = this.basketMax()
     if (holding !== null) {
       best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
@@ -848,7 +866,34 @@ export class Game {
         else offer({ label: `🥗 Salad: ${total}/${SALAD_MIN} veg, ${kinds}/${SALAD_KINDS} kinds. Bring veg from the garden!`, msg: null, d })
       }
       const bin = dist(me, FEED_BIN)
-      if (bin < reach) offer(sack ? { label: 'Put the sack back', msg: { t: 'sack' }, d: bin - 1 } : { label: 'Pick up a sack of pellets', msg: { t: 'sack' }, d: bin - 1 })
+      if (bin < reach) {
+        if (sack) offer({ label: 'Put the sack back', msg: { t: 'sack' }, d: bin - 1 })
+        else if (hay) offer({ label: 'Feed bin: put the hay in a rack at the back of the barn first', msg: null, d: bin - 1 })
+        else if (snap.sacks > 0) offer({ label: `Pick up a sack of pellets (${snap.sacks} left today)`, msg: { t: 'sack' }, d: bin - 1 })
+        else
+          offer({
+            label: 'Feed bin’s empty: pellets are rationed, <b>one sack per hopper a day</b> (more at dawn). Hay’s the main food: fetch it from the 🌾 hay meadow',
+            msg: null,
+            d: bin - 1,
+          })
+      }
+      // Hay: cut an armful from a patch of the hay meadow, put it in the racks in the barn.
+      const patch = snap.land.includes('meadow') ? hayPatchAt(me) : -1
+      if (patch >= 0) {
+        const grown = snap.hayField[patch]
+        if (hay) offer({ label: 'Put the hay back (or take it to the racks in the barn)', msg: { t: 'hay', patch }, d: 0.5 })
+        else if (sack) offer({ label: 'Hands full (pellet sack)', msg: null, d: 0.5 })
+        else if (grown >= 1) offer({ label: 'Cut an armful of hay 🌾', msg: { t: 'hay', patch }, d: 0.5 })
+        else offer({ label: `This hay’s still growing (${Math.round(grown * 100)}%): try another patch`, msg: null, d: 0.5 })
+      }
+      HAY_RACKS.forEach((r, i) => {
+        const d = dist(me, r)
+        if (d > reach) return
+        const level = `${Math.round((snap.racks[i] / HAY_RACK_MAX) * 100)}% full`
+        if (hay) offer(snap.racks[i] >= HAY_RACK_MAX ? { label: 'This hay rack is full', msg: null, d: d - 1 } : { label: `Put the hay in the rack (${level})`, msg: { t: 'rack', rack: i }, d: d - 1.5 })
+        else if (!snap.land.includes('meadow')) offer({ label: `Hay rack ${level}: hay comes from the 🌾 hay meadow (buy it in the shop, B)`, msg: null, d: d - 1 })
+        else offer({ label: `Hay rack ${level}: grab an armful from the 🌾 hay meadow`, msg: null, d: d - 1 })
+      })
       HOPPERS.forEach((h, i) => {
         const d = dist(me, h)
         if (d > reach || (i > 0 && !snap.upgrades.includes('hopper2'))) return
@@ -883,7 +928,7 @@ export class Game {
       }
       for (const v of this.pigs) {
         const s = v.snap.s
-        if (sack || s === 'held' || s === 'carried' || s === 'lost') continue
+        if (sack || hay || s === 'held' || s === 'carried' || s === 'lost') continue
         const d = Math.hypot(v.x - me.x, v.z - me.z)
         if (d < reach) offer({ label: `Pick up <b>${v.look.name}</b> for a health check`, msg: { t: 'pickup', pig: v.look.id }, d })
       }

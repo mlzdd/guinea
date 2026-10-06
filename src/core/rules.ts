@@ -17,6 +17,11 @@ export const DAY_RAMP = 4
 export const NIGHT_START = 0.76
 /** A fresh farm starts in the morning. */
 export const START_TIME = 0.05
+/** At night, once every pig is tucked up asleep in the barn for this long (and nothing's prowling), it's morning. */
+export const SLEEP_SKIP_MS = 3000
+
+/** The farm clock: time of day (0 = dawn) as hours from 6 (6am) to 30 (6am next day). Daytime is 6am–8pm, night 8pm–6am. */
+export const clockHours = (time: number) => (time < NIGHT_START ? 6 + (time / NIGHT_START) * 14 : 20 + ((time - NIGHT_START) / (1 - NIGHT_START)) * 10)
 
 /** How long day `day` (1 = the first) lasts. */
 export const dayLength = (day: number) => (day > DAY_RAMP ? DAY_MS : FIRST_DAY_MS + ((DAY_MS - FIRST_DAY_MS) * (day - 1)) / DAY_RAMP)
@@ -79,6 +84,16 @@ export const BOWL_MAX = 24
 /** Pellet hoppers in the barn: farmers fill them a sack at a time; pigs help themselves. */
 export const HOPPER_MAX = 60
 export const SACK_PELLETS = 40
+/**
+ * Pellets are rationed: the feed bin holds one sack a day for each hopper (restocked at dawn). Hay is the main food:
+ * as much as they like, fetched an armful at a time from the hay meadow's stacks into the racks in the barn.
+ */
+export const HAY_RACK_MAX = 40
+export const HAY_ARMFUL = 20
+/** A cut patch of the hay meadow grows back in this long. */
+export const HAY_REGROW_MS = 120_000
+/** A pig that's had hay in the last day is this much less likely to get overgrown teeth (hay wears them down). */
+export const HAY_TEETH = 0.2
 /** Throws fly for this long plus a bit per metre. */
 export const FLIGHT_BASE_MS = 300
 export const FLIGHT_PER_M_MS = 40
@@ -154,7 +169,7 @@ export const LOST_MS = 40_000
 // Money and upgrades
 export const START_COINS = 20
 /** What a day earns: per point of average happiness, per well-fed pig, per fix, per rescue… */
-export const PAY = { happy: 0.6, fed: 1, treat: 5, save: 10, lost: -10, outAtNight: -2, poorly: -2, craving: 1, salad: 10, saladKind: 3 }
+export const PAY = { happy: 0.6, fed: 1, treat: 5, save: 10, lost: -10, outAtNight: -2, poorly: -2, craving: 1, salad: 10, saladKind: 3, hay: 1 }
 /** Stars on the day's report card, by coins earned. */
 export const STARS = [40, 70, 100, 130]
 
@@ -168,7 +183,7 @@ export const LAND = {
   barn: { icon: '🏠', name: 'Barn', cost: 0, desc: 'Where the piggies sleep' },
   yard: { icon: '🌱', name: 'Yard', cost: 0, desc: 'The lawn in front of the barn, with a little veg bed' },
   garden: { icon: '🥬', name: 'Veg patch', cost: 40, desc: '4 more veg beds behind a fence' },
-  meadow: { icon: '🌾', name: 'Hay meadow', cost: 50, desc: 'Lush grass (grazing fills tummies twice as fast), hay stacks to climb and a hidey hut' },
+  meadow: { icon: '🌾', name: 'Hay meadow', cost: 50, desc: 'Hay! Unlimited hay for the racks in the barn (pellets are rationed). Hay keeps teeth healthy. Lush grass and a hidey hut too' },
   orchard: { icon: '🍎', name: 'Orchard', cost: 60, desc: 'Apple trees: apples drop for the piggies and your basket' },
   huts: { icon: '🛖', name: 'Hut meadow', cost: 60, desc: 'Three hidey huts to dive into when a fox or hawk comes' },
   flowers: { icon: '🌼', name: 'Wild flowers', cost: 70, desc: 'Nibbling dandelions and clover cheers piggies right up' },
@@ -250,7 +265,7 @@ export const EMOTE_COOLDOWN_MS = 800
 export const JOBS_PER_DAY = 3
 export const JOB_PAY = 15
 /** What farmers get credited for (the farm diary counts these too). */
-export const STATS = ['fed', 'wheeks', 'harvest', 'plant', 'apples', 'fill', 'pour', 'fix', 'cuddle', 'shoo', 'save', 'salad'] as const
+export const STATS = ['fed', 'wheeks', 'harvest', 'plant', 'apples', 'fill', 'pour', 'hay', 'fix', 'cuddle', 'shoo', 'save', 'salad'] as const
 export type Stat = (typeof STATS)[number]
 /** `needs`: only dealt once the farm has that square. */
 export const JOBS: Partial<Record<Stat, { goal: number; text: string; needs?: SquareId }>> = {
@@ -259,7 +274,8 @@ export const JOBS: Partial<Record<Stat, { goal: number; text: string; needs?: Sq
   apples: { goal: 8, text: 'Gather {n} apples', needs: 'orchard' },
   fed: { goal: 20, text: 'Throw the piggies {n} veg' },
   fill: { goal: 4, text: 'Fill the bowls {n} times' },
-  pour: { goal: 2, text: 'Pour {n} sacks of pellets' },
+  pour: { goal: 1, text: 'Top up the pellet hopper' },
+  hay: { goal: 3, text: 'Put out {n} armfuls of hay', needs: 'meadow' },
   fix: { goal: 3, text: 'Fix {n} health problems' },
   cuddle: { goal: 5, text: 'Cuddle {n} piggies' },
   shoo: { goal: 2, text: 'Shoo away {n} foxes or hawks' },

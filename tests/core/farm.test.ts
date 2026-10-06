@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { lonePig, ownAll, run, seeded, setup, veg } from './helpers.ts'
-import { Farm, HOPPER_ID } from '../../src/core/farm.ts'
-import { BEDS, BOWLS, FEED_BIN, HOPPERS, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
+import { Farm, HOPPER_ID, RACK_ID } from '../../src/core/farm.ts'
+import { BEDS, BOWLS, FEED_BIN, HAY_PATCHES, HAY_RACKS, HOPPERS, center, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
 import { parseClientMsg } from '../../src/core/protocol.ts'
 import {
   BASKET_MAX,
   BOWL_MAX,
   GROW_MS,
   HARVEST_YIELD,
+  HAY_ARMFUL,
+  HAY_REGROW_MS,
   ISSUE_BIT,
   LOST_MS,
   NIGHT_START,
@@ -313,8 +315,26 @@ describe('day and night', () => {
     run(farm, 60_000, () => farm.pigs.every((p) => isInside(p)))
     const outside = farm.pigs.filter((p) => !isInside(p)).map((p) => `${p.name} ${p.state} ${p.x.toFixed(1)},${p.z.toFixed(1)}`)
     expect(outside).toEqual([])
-    run(farm, 20_000)
-    expect(farm.pigs.filter((p) => p.state === 'sleep').length).toBeGreaterThan(farm.pigs.length / 2)
+    // Once they're all tucked up asleep there's no point waiting: it's morning.
+    expect(run(farm, 60_000, () => farm.day === 2)).toBe(true)
+    expect(farm.out.some((o) => o.msg.t === 'alert' && o.msg.text.includes('fast asleep'))).toBe(true)
+    expect(farm.out.some((o) => o.msg.t === 'report')).toBe(true)
+  })
+
+  it('the night is not skipped while a pig is still up, or a fox is about', () => {
+    const { farm } = setup(3)
+    farm.t = farmTime(NIGHT_START) + 1000
+    for (const p of farm.pigs) Object.assign(p, { x: -5 + (p.id % 6) * 2, z: -20 + Math.floor(p.id / 6) * 1.5, state: 'sleep', until: Infinity })
+    const owl = farm.pigs[3]
+    Object.assign(owl, { state: 'idle', until: Infinity })
+    run(farm, 10_000)
+    expect(farm.day).toBe(1)
+    owl.state = 'sleep'
+    farm.spawnFox()
+    run(farm, 5000)
+    expect(farm.day).toBe(1)
+    farm.preds = []
+    expect(run(farm, 5000, () => farm.day === 2)).toBe(true)
   })
 
   it('the farm clock stops while nobody is on', () => {
@@ -432,6 +452,117 @@ describe('pellets', () => {
     farm.handle(id, { t: 'buy', upgrade: 'hopper2' })
     farm.handle(id, { t: 'pour', hopper: 1 })
     expect(farm.foods.get(HOPPER_ID + 1)!.bites).toBe(SACK_PELLETS)
+  })
+
+  it('pellets are rationed: one sack per hopper a day, restocked at dawn', () => {
+    const { farm, id, me } = setup()
+    expect(farm.snapshot().sacks).toBe(1)
+    Object.assign(me, { x: FEED_BIN.x, z: FEED_BIN.z + 1 })
+    farm.handle(id, { t: 'sack' })
+    expect(me.sack).toBe(true)
+    // Putting it back puts it back in the bin.
+    farm.handle(id, { t: 'sack' })
+    expect(farm.sacks).toBe(1)
+    farm.handle(id, { t: 'sack' })
+    Object.assign(me, { x: HOPPERS[0].x + 1.5, z: HOPPERS[0].z })
+    farm.handle(id, { t: 'pour', hopper: 0 })
+    // That was today's: you just can't grab another.
+    Object.assign(me, { x: FEED_BIN.x, z: FEED_BIN.z + 1 })
+    farm.handle(id, { t: 'sack' })
+    expect(me.sack).toBe(false)
+    expect(farm.snapshot().sacks).toBe(0)
+    farm.payDay()
+    expect(farm.sacks).toBe(1)
+    farm.coins = 1000
+    farm.handle(id, { t: 'buy', upgrade: 'hopper2' })
+    expect(farm.sacks).toBe(2)
+    farm.payDay()
+    expect(farm.sacks).toBe(2)
+  })
+})
+
+describe('hay', () => {
+  it('farmers cut armfuls of hay in the hay meadow and take them to the racks, and pigs eat it', () => {
+    const { farm, id, me } = setup()
+    const rack = farm.foods.get(RACK_ID)!
+    expect(rack.bites).toBe(0)
+    Object.assign(me, center(HAY_PATCHES[0]))
+    farm.handle(id, { t: 'hay', patch: 1 }) // not standing on that one
+    expect(me.hay).toBe(false)
+    farm.handle(id, { t: 'hay', patch: 0 })
+    expect(me.hay).toBe(true)
+    expect(farm.snapshot().hayField[0]).toBe(0)
+    expect(farm.snapshot().farmers[0].hay).toBe(true)
+    // Hands full.
+    me.basket[0] = 1
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: 0, z: -15 })
+    expect(me.basket[0]).toBe(1)
+    farm.handle(id, { t: 'sack' })
+    expect(me.sack).toBe(false)
+
+    const pig = lonePig(farm, HAY_RACKS[0].x, -19, 40)
+    Object.assign(me, { x: HAY_RACKS[0].x, z: HAY_RACKS[0].z + 1.5 })
+    farm.handle(id, { t: 'rack', rack: 0 })
+    expect(me.hay).toBe(false)
+    expect(rack.bites).toBe(HAY_ARMFUL)
+    expect(farm.snapshot().racks[0]).toBe(HAY_ARMFUL)
+    expect(run(farm, 8000, () => pig.state === 'eat' && pig.food === RACK_ID)).toBe(true)
+    run(farm, 3000)
+    expect(rack.bites).toBeLessThan(HAY_ARMFUL)
+    expect(pig.hayAt).toBeGreaterThan(0)
+
+    // Paid for in the morning.
+    farm.out = []
+    farm.payDay()
+    const report = farm.out.find((o) => o.msg.t === 'report')?.msg
+    if (report?.t !== 'report') throw new Error('no report')
+    expect(report.lines.find((l) => l.label.includes('Hay'))?.coins).toBe(1)
+  })
+
+  it('a cut patch grows back before it can be cut again; there are plenty of patches', () => {
+    const { farm, id, me } = setup()
+    expect(HAY_PATCHES.length).toBeGreaterThanOrEqual(12)
+    Object.assign(me, center(HAY_PATCHES[3]))
+    farm.handle(id, { t: 'hay', patch: 3 })
+    // Put it back: the patch is as it was.
+    farm.handle(id, { t: 'hay', patch: 3 })
+    expect(me.hay).toBe(false)
+    expect(farm.snapshot().hayField[3]).toBe(1)
+    farm.handle(id, { t: 'hay', patch: 3 })
+    Object.assign(me, { x: HAY_RACKS[0].x, z: HAY_RACKS[0].z + 1.5 })
+    farm.handle(id, { t: 'rack', rack: 0 })
+    Object.assign(me, center(HAY_PATCHES[3]))
+    farm.handle(id, { t: 'hay', patch: 3 })
+    expect(me.hay).toBe(false) // still stubble
+    run(farm, HAY_REGROW_MS / 2)
+    expect(farm.snapshot().hayField[3]).toBeCloseTo(0.5, 1)
+    run(farm, HAY_REGROW_MS / 2 + 100)
+    farm.handle(id, { t: 'hay', patch: 3 })
+    expect(me.hay).toBe(true)
+    // Saved and loaded mid-regrow.
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.snapshot().hayField[3]).toBe(0)
+  })
+
+  it('no hay meadow, no hay', () => {
+    const { farm, id, me } = setup(1, true)
+    Object.assign(me, center(HAY_PATCHES[0]))
+    farm.handle(id, { t: 'hay', patch: 0 })
+    expect(me.hay).toBe(false)
+  })
+
+  it('hay keeps teeth healthy', () => {
+    const teeth = (hay: boolean) => {
+      let n = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const { farm } = setup(seed)
+        for (const p of farm.pigs) Object.assign(p, { issues: 0, hayAt: hay ? farm.t + 1e9 : -1e9, state: 'sleep', until: Infinity })
+        run(farm, 60_000)
+        n += farm.pigs.filter((p) => p.issues & ISSUE_BIT.teeth).length
+      }
+      return n
+    }
+    expect(teeth(true)).toBeLessThan(teeth(false))
   })
 })
 

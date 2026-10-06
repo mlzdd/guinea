@@ -13,6 +13,8 @@ import {
   FEED_BIN,
   FENCE_EDGES,
   FOX_SOLIDS,
+  HAY_PATCHES,
+  HAY_RACKS,
   HOPPERS,
   PIG_HOUSES,
   PIG_SOLIDS,
@@ -97,6 +99,10 @@ import {
   HAWK_SHOO_EXTRA,
   HAWK_HEIGHT,
   HAWK_SWOOP,
+  HAY_ARMFUL,
+  HAY_RACK_MAX,
+  HAY_REGROW_MS,
+  HAY_TEETH,
   HUNGER_PER_S,
   HUNGRY,
   ISSUE_BIT,
@@ -143,6 +149,7 @@ import {
   SHOO_COOLDOWN_MS,
   SHOO_RADIUS,
   SHOW_PRIZE,
+  SLEEP_SKIP_MS,
   START_COINS,
   STARS,
   START_LAND,
@@ -161,6 +168,7 @@ import {
   basketMax,
   dayLength,
   farmDays,
+  farmTime,
   daysToShow,
   growMs,
   harvestYield,
@@ -197,6 +205,8 @@ export interface Pig extends PigLook {
   /** 0..1: how much this pig likes being indoors. */
   homebody: number
   cuddleAt: number
+  /** When it last ate hay (farm time): hay keeps teeth worn down. */
+  hayAt: number
   /** While expecting: seconds she's been well looked after, out of seconds so far. */
   careGood: number
   careTotal: number
@@ -209,7 +219,7 @@ export interface Pig extends PigLook {
 /** Food on the ground, or a fixed source: bowls are ids 0..3, hoppers 4..5, and they never go away. */
 export interface Food {
   id: number
-  kind: Veg | 'pellets' | 'salad'
+  kind: Veg | 'pellets' | 'salad' | 'hay'
   x: number
   z: number
   bites: number
@@ -259,6 +269,7 @@ interface Farmer {
   basket: number[]
   holding: number | null
   sack: boolean
+  hay: boolean
   lastShoo: number
   lastEmote: number
 }
@@ -287,6 +298,10 @@ export interface FarmSave {
   zoomMeter?: number
   salad?: number[]
   saladServed?: boolean
+  sacks?: number
+  racks?: number[]
+  /** Ms until each hay patch is ready again. */
+  hayLeft?: number[]
 }
 
 interface Job {
@@ -307,8 +322,10 @@ interface DayStats {
   cuddled: Set<number>
   /** Kinds of veg in tonight's salad, once it's served. */
   salad: number
+  /** Pigs that ate hay. */
+  hay: Set<number>
 }
-const newDayStats = (): DayStats => ({ treats: 0, saves: 0, lost: 0, outAtNight: new Set(), craved: new Set(), cuddled: new Set(), salad: 0 })
+const newDayStats = (): DayStats => ({ treats: 0, saves: 0, lost: 0, outAtNight: new Set(), craved: new Set(), cuddled: new Set(), salad: 0, hay: new Set() })
 const zeroStats = () => Object.fromEntries(STATS.map((s) => [s, 0])) as Record<Stat, number>
 
 const SPEED: Partial<Record<PigState, number>> = { wander: PIG_WALK, home: PIG_WALK * 1.5, seek: PIG_SCURRY, flee: PIG_FLEE, zoom: PIG_SCURRY }
@@ -321,11 +338,14 @@ const AWAY: PigState[] = ['held', 'carried', 'lost']
 export const HOPPER_ID = BOWLS.length
 /** The served salad platter is a fixed food too, after the hoppers. */
 export const SALAD_ID = HOPPER_ID + HOPPERS.length
+/** Then the hay racks. */
+export const RACK_ID = SALAD_ID + 1
 const PIG_GAP = 0.6
 const FOOD_RING = 0.45
 const BOWL_RING = 0.6
 
 const r2 = (v: number) => Math.round(v * 100) / 100
+const isVeg = (k: Food['kind']): k is Veg => VEGGIES.includes(k as Veg)
 const bits = (n: number) => ISSUES.reduce((c, i) => c + (n & ISSUE_BIT[i] ? 1 : 0), 0)
 const DONE: Record<Issue, string> = {
   nails: 'trimmed {pig}’s nails ✂️',
@@ -360,6 +380,10 @@ export class Farm {
   /** The salad platter being made at the station (veg in VEGGIES order), and whether tonight's has been served. */
   salad: number[] = VEGGIES.map(() => 0)
   saladServed = false
+  /** When each patch of the hay meadow is ready to cut again (farm time). */
+  hayField: number[] = HAY_PATCHES.map(() => 0)
+  /** Sacks of pellets left in the feed bin today: one per hopper, restocked at dawn. */
+  sacks = 1
   /** The last day everyone was reminded to serve the salad. */
   private saladCalled = 0
   /** Treat of the day: the veg the pigs are craving. */
@@ -375,6 +399,8 @@ export class Farm {
   zoomiesUntil = 0
   /** The zoomometer, 0..1. */
   zoomMeter = 0
+  /** Since when everyone's been tucked up asleep (at night), for skipping to morning. */
+  private asleepSince = Infinity
   /** The squares of land the farm owns. */
   land: SquareId[] = [...START_LAND]
 
@@ -392,6 +418,11 @@ export class Farm {
       this.foods.set(id, { id, kind: 'pellets', x: h.x, z: h.z, bites: i === 0 ? 30 : 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
     })
     this.foods.set(SALAD_ID, { id: SALAD_ID, kind: 'salad', ...SALAD_SPOT, bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
+    HAY_RACKS.forEach((r, i) => {
+      // Pigs eat the hay that falls on the floor in front of the rack.
+      const id = RACK_ID + i
+      this.foods.set(id, { id, kind: 'hay', x: r.x, z: r.z + 0.5, bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
+    })
     if (save) this.load(save)
     setLand(this.land)
     // A fresh farm: a craving and jobs that don't need the dice, so tests stay put.
@@ -437,6 +468,7 @@ export class Farm {
       cuddleAt: -1e9,
       careGood: 0,
       careTotal: 0,
+      hayAt: -1e9,
       stuckAt: 0,
       stuckX: spot.x,
       stuckZ: spot.z,
@@ -482,7 +514,7 @@ export class Farm {
     const id = this.nextFarmer++
     const spot = { x: FARMER_SPAWN.x + this.between(-3, 3), z: FARMER_SPAWN.z + this.between(-1, 1) }
     settleFarmer(spot)
-    this.farmers.set(id, { id, name, color, ...spot, y: 0, yaw: 0, basket: VEGGIES.map(() => 0), holding: null, sack: false, lastShoo: -1e9, lastEmote: -1e9 })
+    this.farmers.set(id, { id, name, color, ...spot, y: 0, yaw: 0, basket: VEGGIES.map(() => 0), holding: null, sack: false, hay: false, lastShoo: -1e9, lastEmote: -1e9 })
     this.alert('farmer', `👋 ${name} arrived on the farm`)
     return id
   }
@@ -532,7 +564,7 @@ export class Farm {
         return this.fillBowl(f, msg.bowl, msg.veg)
       case 'gather': {
         const food = this.foods.get(msg.food)
-        if (!food || food.bowl || food.kind === 'pellets' || food.kind === 'salad' || !food.landed || dist(f, food) > REACH) return
+        if (!food || food.bowl || !isVeg(food.kind) || !food.landed || dist(f, food) > REACH) return
         if (this.basketCount(f) >= basketMax(this.upgrades)) return
         f.basket[VEGGIES.indexOf(food.kind)]++
         this.foods.delete(food.id)
@@ -541,7 +573,7 @@ export class Farm {
       }
       case 'pickup': {
         const p = this.pigs[msg.pig]
-        if (!p || f.holding !== null || f.sack || AWAY.includes(p.state) || dist(f, p) > REACH) return
+        if (!p || f.holding !== null || f.sack || f.hay || AWAY.includes(p.state) || dist(f, p) > REACH) return
         p.state = 'held'
         p.heldBy = f.id
         p.food = null
@@ -575,10 +607,38 @@ export class Farm {
       case 'shoo':
         return this.shoo(f)
       case 'sack':
-        // Pick up a sack at the feed bin, or put it back.
-        if (f.holding !== null || dist(f, FEED_BIN) > REACH) return
-        f.sack = !f.sack
+        // Pick up a sack at the feed bin (if today's aren't all used), or put it back.
+        if (f.holding !== null || f.hay || dist(f, FEED_BIN) > REACH) return
+        if (f.sack) {
+          f.sack = false
+          this.sacks++
+        } else if (this.sacks > 0) {
+          f.sack = true
+          this.sacks--
+        }
         return
+      case 'hay': {
+        // Cut an armful from a patch of the hay meadow (it grows back), or put it back.
+        if (f.holding !== null || f.sack || !owns('meadow') || !inRect(f, HAY_PATCHES[msg.patch], 0.8)) return
+        if (f.hay) {
+          f.hay = false
+          this.hayField[msg.patch] = Math.min(this.hayField[msg.patch], this.t)
+        } else if (this.t >= this.hayField[msg.patch]) {
+          f.hay = true
+          this.hayField[msg.patch] = this.t + HAY_REGROW_MS
+        }
+        return
+      }
+      case 'rack': {
+        const rack = this.foods.get(RACK_ID + msg.rack)!
+        if (!f.hay || dist(f, HAY_RACKS[msg.rack]) > REACH || rack.bites >= HAY_RACK_MAX) return
+        f.hay = false
+        rack.bites = Math.min(HAY_RACK_MAX, rack.bites + HAY_ARMFUL)
+        rack.by = f.name
+        this.excite(rack, EXCITE_RADIUS)
+        this.credit(f.name, 'hay')
+        return
+      }
       case 'pour': {
         const hopper = this.foods.get(HOPPER_ID + msg.hopper)!
         const max = hopperMax(this.upgrades)
@@ -604,6 +664,7 @@ export class Farm {
         if (this.upgrades.includes(msg.upgrade) || this.coins < up.cost || (up.needs && !owns(up.needs))) return
         this.coins -= up.cost
         this.upgrades.push(msg.upgrade)
+        if (msg.upgrade === 'hopper2') this.sacks++ // its first sack, today
         this.alert('shop', `🛒 ${f.name} bought ${up.icon} ${up.name}!`)
         return
       }
@@ -744,7 +805,7 @@ export class Farm {
 
   private throwVeg(f: Farmer, veg: Veg, at: P) {
     const i = VEGGIES.indexOf(veg)
-    if (f.holding !== null || f.sack || f.basket[i] <= 0) return
+    if (f.holding !== null || f.sack || f.hay || f.basket[i] <= 0) return
     let dx = at.x - f.x
     let dz = at.z - f.z
     const d = Math.hypot(dx, dz)
@@ -859,6 +920,7 @@ export class Farm {
     }
     if (this.raining) for (const bed of this.beds) if (bed.stage === 'growing') bed.readyAt -= dtMs * (RAIN_GROW - 1)
     if (this.night) for (const p of this.pigs) if (!isInside(p) && !AWAY.includes(p.state)) this.today.outAtNight.add(p.id)
+    this.skipNight()
 
     for (const food of this.foods.values()) {
       if (!food.landed && this.t >= food.landAt) {
@@ -1078,6 +1140,8 @@ export class Farm {
   }
 
   private foodSpot(p: Pig, food: Food): P {
+    // Along the front of a hay rack.
+    if (food.kind === 'hay') return { x: food.x + (((p.id * 0.618) % 1) - 0.5) * 2.4, z: food.z + 0.35 }
     const a = p.id * 2.39996
     const ring = food.bowl ? BOWL_RING : FOOD_RING
     return { x: food.x + Math.cos(a) * ring, z: food.z + Math.sin(a) * ring }
@@ -1258,6 +1322,7 @@ export class Farm {
     for (const issue of ISSUES) {
       if (p.issues & ISSUE_BIT[issue]) continue
       if (issue === 'sniffles' && !coldNight) continue
+      if (issue === 'teeth' && this.t - p.hayAt < dayLength(this.day) && this.rand() > HAY_TEETH) continue
       if (this.rand() < ISSUE_RATE[issue] * dt) p.issues |= ISSUE_BIT[issue]
     }
     const cosy = this.upgrades.includes('heater') && isInside(p) ? 10 : 0
@@ -1309,7 +1374,11 @@ export class Farm {
           p.hunger = Math.min(100, p.hunger + BITE_HUNGER)
           const craved = food.kind === this.craving
           if (craved) this.today.craved.add(p.id)
-          const treat = food.kind === 'salad' ? 2 + this.today.salad : craved ? CRAVING_HAPPY : food.kind === 'pellets' ? 1 : 2
+          if (food.kind === 'hay') {
+            p.hayAt = this.t
+            this.today.hay.add(p.id)
+          }
+          const treat = food.kind === 'salad' ? 2 + this.today.salad : craved ? CRAVING_HAPPY : food.kind === 'pellets' || food.kind === 'hay' ? 1 : 2
           p.happy = Math.min(100, p.happy + treat)
           if (food.bites <= 0 && !food.bowl) this.foods.delete(food.id)
           if (food.bites <= 0 || p.hunger >= 100) this.afterMeal(p)
@@ -1649,6 +1718,7 @@ export class Farm {
       { label: `🤒 Still poorly (${here.filter((p) => p.issues).length})`, coins: here.filter((p) => p.issues).length * PAY.poorly },
       { label: `🤤 Fed their craving: ${this.craving}s (${d.craved.size} piggies)`, coins: d.craved.size * PAY.craving },
       { label: `🥗 Salad night (${d.salad} kinds of veg)`, coins: d.salad ? PAY.salad + d.salad * PAY.saladKind : 0 },
+      { label: `🌾 Hay munchers (${d.hay.size})`, coins: d.hay.size * PAY.hay },
     ].filter((l) => l.coins !== 0)
     // Every few days, the pig show: the best-kept piggy wins a rosette and a prize.
     const winner = daysToShow(this.day - 1) === 0 ? this.bestInShow(here) : null
@@ -1674,6 +1744,8 @@ export class Farm {
   /** Dawn: a new craving, new jobs, maybe rain. */
   private newDay() {
     this.today = newDayStats()
+    // The feed bin is restocked: a sack for each hopper.
+    this.sacks = HOPPERS.filter((_, i) => this.hopperBuilt(i)).length
     // Last night's leftovers get cleared away; a new platter can be made.
     this.saladServed = false
     this.foods.get(SALAD_ID)!.bites = 0
@@ -1688,6 +1760,21 @@ export class Farm {
       this.rainFrom = this.rainTo = 0
     }
     if (daysToShow(this.day) === 0) this.alert('fun', '🏆 Pig show tonight! Feed, cuddle and health-check everyone: the best-kept piggy wins')
+  }
+
+  /** Everyone in the barn asleep (or settling into bed), nothing prowling: why wait? On to morning. */
+  private skipNight() {
+    const tucked = this.night && !this.preds.length && this.pigs.every((p) => p.state === 'lost' || (isInside(p) && (p.state === 'sleep' || p.state === 'home')))
+    if (!tucked) {
+      this.asleepSince = Infinity
+      return
+    }
+    this.asleepSince = Math.min(this.asleepSince, this.t)
+    if (this.t - this.asleepSince < SLEEP_SKIP_MS) return
+    this.asleepSince = Infinity
+    this.alert('night', '😴 All the piggies are fast asleep… and it’s morning!')
+    // Just before dawn, so the next tick is dawn as usual (pay day, report card).
+    this.t = Math.max(this.t, farmTime(Math.floor(this.days) + 1) - 1)
   }
 
   /** Now and then a happy sow gets pregnant (with a boar about and room in the barn); mums give birth; pups grow up. */
@@ -1770,6 +1857,7 @@ export class Farm {
       basket: [...f.basket],
       holding: f.holding,
       sack: f.sack,
+      hay: f.hay,
     }))
     const pigs: PigSnap[] = this.pigs.map((p) => ({
       id: p.id,
@@ -1797,9 +1885,12 @@ export class Farm {
       })),
       bowls: BOWLS.map((_, i) => {
         const bowl = this.foods.get(i)!
-        return { bites: bowl.bites, kind: bowl.kind === 'pellets' || bowl.kind === 'salad' ? 'carrot' : bowl.kind }
+        return { bites: bowl.bites, kind: isVeg(bowl.kind) ? bowl.kind : 'carrot' }
       }),
       hoppers: HOPPERS.map((_, i) => this.foods.get(HOPPER_ID + i)!.bites),
+      sacks: this.sacks,
+      racks: HAY_RACKS.map((_, i) => this.foods.get(RACK_ID + i)!.bites),
+      hayField: this.hayField.map((at) => r2(Math.max(0, Math.min(1, 1 - (at - this.t) / HAY_REGROW_MS)))),
       preds,
       coins: this.coins,
       upgrades: [...this.upgrades],
@@ -1849,6 +1940,9 @@ export class Farm {
       beds: this.beds.map((b) => ({ stage: b.stage, left: Math.max(0, b.readyAt - this.t) })),
       bowls: BOWLS.map((_, i) => this.foods.get(i)!.bites),
       hoppers: HOPPERS.map((_, i) => this.foods.get(HOPPER_ID + i)!.bites),
+      sacks: this.sacks,
+      racks: HAY_RACKS.map((_, i) => this.foods.get(RACK_ID + i)!.bites),
+      hayLeft: this.hayField.map((at) => Math.max(0, at - this.t)),
       coins: this.coins,
       upgrades: [...this.upgrades],
       craving: this.craving,
@@ -1911,6 +2005,15 @@ export class Farm {
     this.doorShut = s.door === true
     if (Array.isArray(s.salad) && s.salad.length === VEGGIES.length && s.salad.every(num)) this.salad = s.salad.map((n) => Math.max(0, Math.min(SALAD_MAX, n)))
     this.saladServed = s.saladServed === true
+    if (num(s.sacks)) this.sacks = Math.max(0, Math.min(HOPPERS.length, s.sacks!))
+    if (Array.isArray(s.hayLeft))
+      s.hayLeft.slice(0, HAY_PATCHES.length).forEach((left, i) => {
+        if (num(left)) this.hayField[i] = this.t + Math.max(0, Math.min(HAY_REGROW_MS, left))
+      })
+    if (Array.isArray(s.racks))
+      s.racks.slice(0, HAY_RACKS.length).forEach((bites, i) => {
+        if (num(bites)) this.foods.get(RACK_ID + i)!.bites = Math.max(0, Math.min(HAY_RACK_MAX, bites))
+      })
     if (num(s.zoomMeter)) this.zoomMeter = Math.max(0, Math.min(1, s.zoomMeter!))
     // Family and friends must point at real pigs; saves from before friends pair up in twos.
     const n = this.pigs.length

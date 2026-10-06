@@ -1,4 +1,4 @@
-import { BEDS, BOWLS, HOPPERS } from './map.ts'
+import { BEDS, BOWLS, HAY_PATCHES, HAY_RACKS, HOPPERS } from './map.ts'
 import type { PigLook } from './pigs.ts'
 import { EMOTES, FARMER_COLORS, ISSUES, SQUARE_IDS, UPGRADE_IDS, VEGGIES, type Issue, type SquareId, type Stat, type UpgradeId, type Veg } from './rules.ts'
 
@@ -37,8 +37,9 @@ export interface FarmerSnap {
   /** Count of each veg, in VEGGIES order. */
   basket: number[]
   holding: number | null
-  /** Carrying a sack of pellets. */
+  /** Carrying a sack of pellets, or an armful of hay. */
   sack: boolean
+  hay: boolean
 }
 
 export interface PigSnap {
@@ -107,6 +108,9 @@ export type ClientMsg =
   /** At the feed bin: pick up a sack of pellets (or put it back). */
   | { t: 'sack' }
   | { t: 'pour'; hopper: number }
+  /** On a patch of the hay meadow: cut an armful (or put it back). */
+  | { t: 'hay'; patch: number }
+  | { t: 'rack'; rack: number }
   | { t: 'buy'; upgrade: UpgradeId }
   /** Buy a square of land. */
   | { t: 'land'; square: SquareId }
@@ -141,8 +145,12 @@ export type ServerMsg =
       beds: BedSnap[]
       /** Bites left in each bowl, and what's in it. */
       bowls: { bites: number; kind: Veg }[]
-      /** Pellets left in each hopper (bites). */
+      /** Pellets left in each hopper (bites), and sacks left in the feed bin today. */
       hoppers: number[]
+      sacks: number
+      /** Hay in each rack (bites), and how grown each patch of the hay meadow is (0..1, 1 = ready to cut). */
+      racks: number[]
+      hayField: number[]
       preds: PredSnap[]
       /** The farm's shared wallet, and what it has bought. */
       coins: number
@@ -219,6 +227,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return isIndex(o.pig, 1e6) ? { t: 'pickup', pig: o.pig } : null
     case 'treat':
       return ISSUES.includes(o.issue as Issue) ? { t: 'treat', issue: o.issue as Issue } : null
+    case 'rack':
+      return isIndex(o.rack, HAY_RACKS.length) ? { t: 'rack', rack: o.rack } : null
     case 'pour':
       return isIndex(o.hopper, HOPPERS.length) ? { t: 'pour', hopper: o.hopper } : null
     case 'buy':
@@ -229,6 +239,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return typeof o.name === 'string' && cleanName(o.name, '') ? { t: 'rename', name: cleanName(o.name) } : null
     case 'emote':
       return isIndex(o.e, EMOTES.length) ? { t: 'emote', e: o.e } : null
+    case 'hay':
+      return isIndex(o.patch, HAY_PATCHES.length) ? { t: 'hay', patch: o.patch } : null
     case 'adopt':
     case 'salad':
     case 'serve':

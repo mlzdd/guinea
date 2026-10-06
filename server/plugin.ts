@@ -1,8 +1,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { Server as HttpServer } from 'node:http'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Plugin } from 'vite'
 import { WebSocket, WebSocketServer } from 'ws'
+import { checkpointer } from './checkpoints.ts'
 import { Farm } from '../src/core/farm.ts'
 import { parseClientMsg, type ServerMsg } from '../src/core/protocol.ts'
 import { TICK_MS } from '../src/core/rules.ts'
@@ -13,6 +14,8 @@ const SAVE_EVERY_MS = 20_000
 export interface ServerOptions {
   /** Where the farm is kept between runs. Leave out to start fresh every time (tests do). */
   saveFile?: string
+  /** Where the half-hourly checkpoints go (next to the save file, by default). */
+  checkpoints?: string
 }
 
 function loadSave(file: string): unknown {
@@ -60,6 +63,8 @@ export function attachGameServer(http: HttpServer, opts: ServerOptions = {}): We
   const save = () => {
     if (opts.saveFile) writeSave(opts.saveFile, farm)
   }
+  const checkpointDir = opts.checkpoints ?? (opts.saveFile ? join(dirname(opts.saveFile), 'checkpoints') : null)
+  const checkpoint = checkpointDir ? checkpointer(checkpointDir) : null
 
   http.on('upgrade', (req, socket, head) => {
     // Leave Vite's own hot-reload socket alone.
@@ -110,6 +115,7 @@ export function attachGameServer(http: HttpServer, opts: ServerOptions = {}): We
     farm.tick(Math.min(now - last, 250))
     last = now
     flush()
+    checkpoint?.(farm)
     if (sockets.size === 0) return
     const snap = JSON.stringify(farm.snapshot())
     for (const ws of sockets.values()) if (ws.readyState === WebSocket.OPEN) ws.send(snap)
