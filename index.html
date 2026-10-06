@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guinea Orchard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="lobby">
+      <h1>Guinea <span>Orchard</span></h1>
+      <p class="tagline">Feed the piggies · keep the foxes off · do the health checks</p>
+      <canvas id="preview" title="Click for another piggy"></canvas>
+      <p id="note">Connecting…</p>
+      <div id="colors"></div>
+      <form id="join">
+        <input id="name" maxlength="16" placeholder="Your name" autocomplete="off" />
+        <button type="submit">Go to the farm</button>
+      </form>
+      <p id="error"></p>
+    </div>
+
+    <div id="hud" hidden>
+      <div id="topbar"><div id="clock"></div><div id="stats"></div></div>
+      <div id="farmers"></div>
+      <div id="feed"></div>
+      <div id="arrows"></div>
+      <div id="tooltip" hidden></div>
+      <div id="toast"></div>
+      <div id="prompt" hidden></div>
+      <div id="basket"></div>
+      <div id="check" hidden></div>
+      <div id="help" class="open">
+        <h2>How to farm <kbd>H</kbd></h2>
+        <table>
+          <tr><td>WASD</td><td>walk (Shift to run)</td></tr>
+          <tr><td>Click</td><td>throw veg where you point</td></tr>
+          <tr><td>1–5</td><td>pick which veg to throw</td></tr>
+          <tr><td>E</td><td>harvest, plant, fill bowls, pick up a piggy</td></tr>
+          <tr><td>F</td><td>SHOO! (foxes and hawks)</td></tr>
+          <tr><td>Right-drag / Q R</td><td>turn the camera</td></tr>
+          <tr><td>Wheel</td><td>zoom</td></tr>
+        </table>
+        <ul>
+          <li>Hungry piggies come running when veg lands near them.</li>
+          <li>The garden 🥕 regrows after you replant it. Apples 🍎 fall in the orchard.</li>
+          <li>Fill the bowls in the barn for the night.</li>
+          <li>Pick piggies up for a health check: nails, mites, sniffles, teeth.</li>
+          <li>At night, get everyone indoors: foxes come out.</li>
+        </ul>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
