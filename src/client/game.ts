@@ -1,9 +1,8 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, dist, inRect, isInside, settleFarmer } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, FEED_BIN, HOPPERS, dist, inRect, isInside, settleFarmer } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
-  BASKET_MAX,
   BOWL_MAX,
   FARMER_COLORS,
   REACH,
@@ -14,6 +13,8 @@ import {
   VEGGIES,
   WALK_SPEED,
   type Veg,
+  basketMax,
+  hopperMax,
 } from '../core/rules.ts'
 import { facing, yawTowards } from '../core/vec.ts'
 import { Bubbles, type BubbleStyle } from './bubbles.ts'
@@ -207,6 +208,14 @@ export class Game {
     return this.mySnap()?.basket ?? VEGGIES.map(() => 0)
   }
 
+  private basketMax(): number {
+    return basketMax(this.snap?.upgrades ?? [])
+  }
+
+  private hasSack(): boolean {
+    return this.mySnap()?.sack ?? false
+  }
+
   private holding(): number | null {
     return this.mySnap()?.holding ?? null
   }
@@ -242,6 +251,10 @@ export class Game {
         if (v) this.bubbles.say(v.model.root, pickOne(['purrrr ♥', 'chutt chutt ♥', 'purr purr ♥']), 'love', 0.7)
         return
       }
+      case 'report':
+        this.hud.showReport(msg, () => this.hud.toggleShop(true))
+        this.hud.alert('day', `🪙 Day ${msg.day} earned the farm ${msg.total} coins`)
+        return
       case 'alert':
         this.hud.alert(msg.kind, msg.text)
         return
@@ -341,10 +354,13 @@ export class Game {
 
     this.world.setBeds(snap.beds)
     this.world.setBowls(snap.bowls)
+    this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
+    this.world.setUpgrades(snap.upgrades)
+    this.hud.setCoins(snap.coins)
     this.hud.setFarmers(snap.farmers, this.myId)
     this.hud.setClock(snap.day, snap.time)
     this.hud.setStats(snap.pigs, snap.pigs.filter((p) => p.s !== 'lost' && isInside(p)).length, snap.pigs.length)
-    this.hud.setBasket(this.basket(), this.selected)
+    this.hud.setBasket(this.basket(), this.selected, this.basketMax())
   }
 
   private predSays(v: PredView, p: PredSnap) {
@@ -363,13 +379,19 @@ export class Game {
       const i = Number(code.slice(5)) - 1
       if (i >= 0 && i < VEGGIES.length) {
         this.selected = i
-        this.hud.setBasket(this.basket(), this.selected)
+        this.hud.setBasket(this.basket(), this.selected, this.basketMax())
       }
     } else if (code === 'KeyE') {
       if (this.action?.msg) this.send(this.action.msg)
     } else if (code === 'KeyF') {
       this.send({ t: 'shoo' })
       if (this.me.model) this.bubbles.say(this.me.model.root, pickOne(['SHOO!', 'GO ON, SHOO!', 'OI! SHOO!']), 'shoo', 2.6, 0.8)
+    } else if (code === 'KeyB') {
+      this.hud.hideReport()
+      this.hud.toggleShop()
+    } else if (code === 'Escape') {
+      this.hud.toggleShop(false)
+      this.hud.hideReport()
     } else if (code === 'KeyH') {
       const help = document.getElementById('help')!
       help.classList.toggle('open')
@@ -382,6 +404,10 @@ export class Game {
     if (!this.snap || this.clock - this.lastThrow < THROW_COOLDOWN) return
     if (this.holding() !== null) {
       this.hud.toast('Put the piggy down first (E)')
+      return
+    }
+    if (this.hasSack()) {
+      this.hud.toast('Pour that sack into a hopper first (E)')
       return
     }
     const basket = this.basket()
@@ -439,7 +465,8 @@ export class Game {
     mine.root.rotation.y = this.me.yaw
     const basket = this.basket()
     const top = basket.findLastIndex((n) => n > 0)
-    mine.pose(dt, this.me.speed, holding !== null, basket.reduce((a, b) => a + b, 0) / BASKET_MAX, top < 0 ? 0 : VEG_COLOR[VEGGIES[top]])
+    const sack = this.hasSack()
+    mine.pose(dt, this.me.speed, holding !== null || sack, basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack)
 
     if (performance.now() - this.lastSend > SEND_MS) {
       this.lastSend = performance.now()
@@ -468,6 +495,7 @@ export class Game {
     this.world.setCutaway(inside)
     this.world.setTime(this.snap.time, this.camTarget)
     this.bubbles.update(dt)
+    this.hud.updateShop(this.snap.coins, this.snap.upgrades, (upgrade) => this.send({ t: 'buy', upgrade }))
     this.hud.showCheck(holding === null ? null : this.looks[holding], holding === null ? null : this.pigs[holding].snap, {
       treat: (issue) => this.send({ t: 'treat', issue }),
       cuddle: () => this.send({ t: 'cuddle' }),
@@ -489,7 +517,7 @@ export class Game {
       v.model.root.position.set(v.x, v.model.root.position.y, v.z)
       v.model.root.rotation.y = v.yaw
       const top = s.basket.findLastIndex((n) => n > 0)
-      v.model.pose(dt, v.speed, s.holding !== null, s.basket.reduce((a, b) => a + b, 0) / BASKET_MAX, top < 0 ? 0 : VEG_COLOR[VEGGIES[top]])
+      v.model.pose(dt, v.speed, s.holding !== null || s.sack, s.basket.reduce((a, b) => a + b, 0) / this.basketMax(), top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack)
     }
   }
 
@@ -685,9 +713,22 @@ export class Game {
       if (!best || a.d < best.d) best = a
     }
 
+    const sack = this.hasSack()
+    const max = this.basketMax()
     if (holding !== null) {
       best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
     } else {
+      const bin = dist(me, FEED_BIN)
+      if (bin < reach) offer(sack ? { label: 'Put the sack back', msg: { t: 'sack' }, d: bin - 1 } : { label: 'Pick up a sack of pellets', msg: { t: 'sack' }, d: bin - 1 })
+      HOPPERS.forEach((h, i) => {
+        const d = dist(me, h)
+        if (d > reach || (i > 0 && !snap.upgrades.includes('hopper2'))) return
+        const hmax = hopperMax(snap.upgrades)
+        const level = `${Math.round((snap.hoppers[i] / hmax) * 100)}% full`
+        if (!sack) offer({ label: `Pellet hopper ${level}: fetch a sack from the feed bin`, msg: null, d: d - 1 })
+        else if (snap.hoppers[i] >= hmax) offer({ label: 'The hopper is full', msg: null, d: d - 1 })
+        else offer({ label: `Pour the pellets in (hopper ${level})`, msg: { t: 'pour', hopper: i }, d: d - 1.5 })
+      })
       BOWLS.forEach((b, i) => {
         const d = dist(me, b)
         if (d > reach) return
@@ -702,17 +743,17 @@ export class Game {
         const stage = snap.beds[i].stage
         const name = `${VEG_ICON[b.kind]} ${VEG_LABEL[b.kind].toLowerCase()}s`
         if (stage === 'ripe')
-          offer(count >= BASKET_MAX ? { label: 'Basket full!', msg: null, d } : { label: `Harvest ${name}`, msg: { t: 'harvest', bed: i }, d })
+          offer(count >= max ? { label: 'Basket full!', msg: null, d } : { label: `Harvest ${name}`, msg: { t: 'harvest', bed: i }, d })
         else if (stage === 'empty') offer({ label: `Plant ${name}`, msg: { t: 'plant', bed: i }, d })
         else offer({ label: `${name} growing… ${Math.round(snap.beds[i].grow * 100)}%`, msg: null, d })
       })
       for (const f of snap.foods) {
         const d = dist(me, f)
-        if (d < reach && count < BASKET_MAX) offer({ label: `Pick up the ${VEG_LABEL[f.kind].toLowerCase()}`, msg: { t: 'gather', food: f.id }, d: d + 0.3 })
+        if (d < reach && count < max) offer({ label: `Pick up the ${VEG_LABEL[f.kind].toLowerCase()}`, msg: { t: 'gather', food: f.id }, d: d + 0.3 })
       }
       for (const v of this.pigs) {
         const s = v.snap.s
-        if (s === 'held' || s === 'carried' || s === 'lost') continue
+        if (sack || s === 'held' || s === 'carried' || s === 'lost') continue
         const d = Math.hypot(v.x - me.x, v.z - me.z)
         if (d < reach) offer({ label: `Pick up <b>${v.look.name}</b> for a health check`, msg: { t: 'pickup', pig: v.look.id }, d })
       }

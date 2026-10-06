@@ -1,6 +1,6 @@
-import { BEDS, BOWLS } from './map.ts'
+import { BEDS, BOWLS, HOPPERS } from './map.ts'
 import type { PigLook } from './pigs.ts'
-import { FARMER_COLORS, ISSUES, VEGGIES, type Issue, type Veg } from './rules.ts'
+import { FARMER_COLORS, ISSUES, UPGRADE_IDS, VEGGIES, type Issue, type UpgradeId, type Veg } from './rules.ts'
 
 export type PigState =
   | 'idle'
@@ -33,6 +33,8 @@ export interface FarmerSnap {
   /** Count of each veg, in VEGGIES order. */
   basket: number[]
   holding: number | null
+  /** Carrying a sack of pellets. */
+  sack: boolean
 }
 
 export interface PigSnap {
@@ -85,8 +87,12 @@ export type ClientMsg =
   | { t: 'cuddle' }
   | { t: 'treat'; issue: Issue }
   | { t: 'shoo' }
+  /** At the feed bin: pick up a sack of pellets (or put it back). */
+  | { t: 'sack' }
+  | { t: 'pour'; hopper: number }
+  | { t: 'buy'; upgrade: UpgradeId }
 
-export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer'
+export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop'
 
 export type ServerMsg =
   /** Sent to a page that hasn't joined yet, and again when the farmer count changes. */
@@ -104,8 +110,15 @@ export type ServerMsg =
       beds: BedSnap[]
       /** Bites left in each bowl, and what's in it. */
       bowls: { bites: number; kind: Veg }[]
+      /** Pellets left in each hopper (bites). */
+      hoppers: number[]
       preds: PredSnap[]
+      /** The farm's shared wallet, and what it has bought. */
+      coins: number
+      upgrades: UpgradeId[]
     }
+  /** End of a day: how it went and what it earned. */
+  | { t: 'report'; day: number; lines: { label: string; coins: number }[]; total: number; stars: number; coins: number }
   /** A veg was thrown: animate it from `from` to `to` over `ms`. */
   | { t: 'thrown'; by: number; kind: Veg; from: { x: number; z: number }; to: { x: number; z: number }; ms: number }
   | { t: 'shoo'; by: number; x: number; z: number }
@@ -157,9 +170,14 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return isIndex(o.pig, 1e6) ? { t: 'pickup', pig: o.pig } : null
     case 'treat':
       return ISSUES.includes(o.issue as Issue) ? { t: 'treat', issue: o.issue as Issue } : null
+    case 'pour':
+      return isIndex(o.hopper, HOPPERS.length) ? { t: 'pour', hopper: o.hopper } : null
+    case 'buy':
+      return UPGRADE_IDS.includes(o.upgrade as UpgradeId) ? { t: 'buy', upgrade: o.upgrade as UpgradeId } : null
     case 'putdown':
     case 'cuddle':
     case 'shoo':
+    case 'sack':
       return { t: o.t }
     default:
       return null

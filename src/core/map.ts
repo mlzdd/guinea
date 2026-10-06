@@ -88,6 +88,17 @@ export const BOWLS: P[] = [
   { x: 2.5, z: -21.5 },
   { x: 7, z: -21 },
 ]
+/** Pellet hoppers inside the barn (the second one has to be bought). Round, so pigs eat all the way round. */
+export const HOPPERS: P[] = [
+  { x: -10, z: -18.6 },
+  { x: 10, z: -18.6 },
+]
+/** Where the sacks of pellets are kept, just inside the door. */
+export const FEED_BIN: P = { x: 5, z: -11.4 }
+/** Upgrades that show up on the farm. */
+export const SCARECROW: P = { x: 3, z: 3 }
+export const COMPOST: P = { x: -13.5, z: 21.5 }
+
 /** Little wooden houses inside the barn, where pigs like to sleep. Not solid. */
 export const PIG_HOUSES: P[] = [
   { x: -9.3, z: -14 },

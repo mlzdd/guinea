@@ -631,3 +631,181 @@ kbd {
     transform: none;
   }
 }
+
+/* Wallet */
+
+#topbar .row {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+}
+
+#coins {
+  display: inline-block;
+  font-size: 26px;
+  color: var(--sun);
+}
+
+#coins.bump {
+  animation: bump 0.6s ease-out;
+}
+
+@keyframes bump {
+  30% {
+    transform: scale(1.35);
+  }
+}
+
+/* Shop and end-of-day report: cream cards in the middle */
+
+#shop,
+#report {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 16px 22px;
+  color: var(--ink);
+  text-shadow: none;
+  background: var(--cream);
+  border: 4px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 0 6px 0 var(--ink);
+  pointer-events: auto;
+}
+
+#shop h3,
+#report h3 {
+  margin: 0;
+  font-size: 34px;
+  text-align: center;
+}
+
+#shop .wallet,
+#report .wallet {
+  margin: 6px 0 10px;
+  font-size: 17px;
+  text-align: center;
+}
+
+#shop table,
+#report table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#shop td {
+  padding: 6px 4px;
+  border-top: 2px dashed #e4d8bc;
+  vertical-align: middle;
+}
+
+#shop td.icon {
+  width: 40px;
+  font-size: 28px;
+  text-align: center;
+}
+
+#shop td small {
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+#shop td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+#shop tr.have {
+  opacity: 0.55;
+}
+
+#shop .owned {
+  color: #2f8a3a;
+}
+
+#shop .hint {
+  margin: 10px 0 0;
+  font-size: 14px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+#shop button,
+#report button {
+  font: inherit;
+  font-size: 17px;
+  padding: 4px 12px;
+  color: var(--ink);
+  background: var(--sun);
+  border: 3px solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 0 2px 0 var(--ink);
+  cursor: pointer;
+}
+
+#shop button:disabled {
+  background: #e4d8bc;
+  opacity: 0.6;
+  cursor: default;
+}
+
+#shop button:not(:disabled):active,
+#report button:active {
+  transform: translateY(2px);
+  box-shadow: none;
+}
+
+#report .stars {
+  margin: 4px 0 0;
+  font-size: 40px;
+  color: #f2a630;
+  text-align: center;
+  letter-spacing: 4px;
+}
+
+#report .verdict {
+  margin: 0 0 10px;
+  font-size: 22px;
+  text-align: center;
+}
+
+#report td {
+  padding: 3px 4px;
+  font-size: 17px;
+}
+
+#report td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+#report .ok {
+  color: #2f8a3a;
+}
+
+#report .bad {
+  color: #c8352a;
+}
+
+#report tr.sum td {
+  padding-top: 8px;
+  font-size: 22px;
+  border-top: 3px solid var(--ink);
+}
+
+#report .buttons {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+#report kbd {
+  font-size: 12px;
+  padding: 0 4px;
+  box-shadow: none;
+  border-width: 1px;
+}

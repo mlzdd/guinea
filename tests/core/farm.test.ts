@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { Farm, type Pig } from '../../src/core/farm.ts'
-import { BEDS, BOWLS, FARM_GATE, isInside, pigCanStand } from '../../src/core/map.ts'
+import { Farm, HOPPER_ID, type Pig } from '../../src/core/farm.ts'
+import { BEDS, BOWLS, FARM_GATE, FEED_BIN, HOPPERS, isInside, pigCanStand } from '../../src/core/map.ts'
 import { parseClientMsg } from '../../src/core/protocol.ts'
 import {
   BASKET_MAX,
@@ -11,6 +11,8 @@ import {
   ISSUE_BIT,
   LOST_MS,
   NIGHT_START,
+  SACK_PELLETS,
+  UPGRADES,
   START_TIME,
   THROW_RANGE,
   TICK_MS,
@@ -354,12 +356,134 @@ describe('the farm over time', () => {
   })
 })
 
+describe('pellets', () => {
+  it('farmers carry a sack from the feed bin to the hopper, and hungry pigs eat the pellets', () => {
+    const { farm, id, me } = setup()
+    const pig = lonePig(farm, -6, -18)
+    for (const b of BOWLS.keys()) farm.foods.get(b)!.bites = 0
+    const hopper = farm.foods.get(HOPPER_ID)!
+    hopper.bites = 0
+
+    // No sack, no pellets.
+    Object.assign(me, { x: HOPPERS[0].x + 1.5, z: HOPPERS[0].z })
+    farm.handle(id, { t: 'pour', hopper: 0 })
+    expect(hopper.bites).toBe(0)
+
+    Object.assign(me, { x: FEED_BIN.x, z: FEED_BIN.z + 1 })
+    farm.handle(id, { t: 'sack' })
+    expect(me.sack).toBe(true)
+    // Hands full: no throwing or picking up pigs.
+    me.basket[0] = 1
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: 0, z: -15 })
+    expect(me.basket[0]).toBe(1)
+
+    Object.assign(me, { x: HOPPERS[0].x + 1.5, z: HOPPERS[0].z })
+    farm.handle(id, { t: 'pour', hopper: 0 })
+    expect(me.sack).toBe(false)
+    expect(hopper.bites).toBe(SACK_PELLETS)
+    expect(pig.state).toBe('seek')
+    expect(run(farm, 8000, () => pig.state === 'eat')).toBe(true)
+    run(farm, 3000)
+    expect(hopper.bites).toBeLessThan(SACK_PELLETS)
+    expect(farm.snapshot().hoppers[0]).toBe(hopper.bites)
+  })
+
+  it('the second hopper only works once it is bought', () => {
+    const { farm, id, me } = setup()
+    Object.assign(me, { x: FEED_BIN.x, z: FEED_BIN.z })
+    farm.handle(id, { t: 'sack' })
+    Object.assign(me, { x: HOPPERS[1].x - 1.5, z: HOPPERS[1].z })
+    farm.handle(id, { t: 'pour', hopper: 1 })
+    expect(farm.foods.get(HOPPER_ID + 1)!.bites).toBe(0)
+    expect(me.sack).toBe(true)
+
+    farm.coins = 1000
+    farm.handle(id, { t: 'buy', upgrade: 'hopper2' })
+    farm.handle(id, { t: 'pour', hopper: 1 })
+    expect(farm.foods.get(HOPPER_ID + 1)!.bites).toBe(SACK_PELLETS)
+  })
+})
+
+describe('money and upgrades', () => {
+  it('upgrades cost coins from the shared wallet, once each', () => {
+    const { farm, id, me } = setup()
+    farm.coins = UPGRADES.basket.cost - 1
+    farm.handle(id, { t: 'buy', upgrade: 'basket' })
+    expect(farm.upgrades).toEqual([])
+
+    farm.coins = UPGRADES.basket.cost + 5
+    farm.handle(id, { t: 'buy', upgrade: 'basket' })
+    farm.handle(id, { t: 'buy', upgrade: 'basket' })
+    expect(farm.upgrades).toEqual(['basket'])
+    expect(farm.coins).toBe(5)
+    expect(farm.snapshot()).toMatchObject({ coins: 5, upgrades: ['basket'] })
+
+    // The bigger basket holds more.
+    farm.beds[0].stage = 'ripe'
+    me.basket[veg('apple')] = BASKET_MAX - 1
+    Object.assign(me, { x: BEDS[0].x + 2, z: BEDS[0].z })
+    farm.handle(id, { t: 'harvest', bed: 0 })
+    expect(farm.basketCount(me)).toBe(BASKET_MAX - 1 + HARVEST_YIELD)
+  })
+
+  it('sprinklers make crops grow faster', () => {
+    const { farm, id, me } = setup()
+    farm.upgrades = ['sprinkler']
+    farm.beds[0].stage = 'empty'
+    Object.assign(me, { x: BEDS[0].x + 2, z: BEDS[0].z })
+    farm.handle(id, { t: 'plant', bed: 0 })
+    run(farm, GROW_MS * 0.65)
+    expect(farm.beds[0].stage).toBe('ripe')
+  })
+
+  it('each morning the day is scored and the farm gets paid', () => {
+    const { farm, id, me } = setup()
+    const before = farm.coins
+    // A good day: a fix and a rescue. A bad bit: one pig carried off.
+    const pig = lonePig(farm, 2, 2, 90)
+    pig.issues = ISSUE_BIT.nails
+    Object.assign(me, { x: 3, z: 2 })
+    farm.handle(id, { t: 'pickup', pig: 0 })
+    farm.handle(id, { t: 'treat', issue: 'nails' })
+    farm.handle(id, { t: 'putdown' })
+    // Everyone tucked up in the barn.
+    for (const p of farm.pigs) Object.assign(p, { hunger: 90, happy: 80, issues: 0, x: -8 + (p.id % 9) * 2, z: -20 + Math.floor(p.id / 9) * 2 })
+
+    farm.t = DAY_MS * (1 - START_TIME) - 1000 // just before dawn
+    farm.tick(TICK_MS)
+    farm.out = []
+    run(farm, 2000)
+    const report = farm.out.find((o) => o.msg.t === 'report')?.msg
+    if (report?.t !== 'report') throw new Error('no report')
+    expect(report.day).toBe(1)
+    expect(report.lines.find((l) => l.label.includes('Health fixes'))?.coins).toBe(5)
+    expect(report.total).toBeGreaterThan(50)
+    expect(report.stars).toBeGreaterThanOrEqual(2)
+    expect(farm.coins).toBe(before + report.total)
+    expect(report.coins).toBe(farm.coins)
+  })
+
+  it('a farm saves its coins, upgrades and pellets', () => {
+    const { farm } = setup()
+    farm.coins = 123
+    farm.upgrades = ['hopper2', 'fence']
+    farm.foods.get(HOPPER_ID + 1)!.bites = 17
+    const again = new Farm(seeded(5), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.coins).toBe(123)
+    expect(again.upgrades).toEqual(['hopper2', 'fence'])
+    expect(again.foods.get(HOPPER_ID + 1)!.bites).toBe(17)
+  })
+})
+
 describe('messages', () => {
   it('rejects junk and cleans names', () => {
     expect(parseClientMsg('nope')).toBeNull()
     expect(parseClientMsg(JSON.stringify({ t: 'throw', veg: 'cake', x: 1, z: 1 }))).toBeNull()
     expect(parseClientMsg(JSON.stringify({ t: 'state', x: 1e9, z: 0, yaw: 0 }))).toBeNull()
     expect(parseClientMsg(JSON.stringify({ t: 'harvest', bed: 99 }))).toBeNull()
+    expect(parseClientMsg(JSON.stringify({ t: 'buy', upgrade: 'rocket' }))).toBeNull()
+    expect(parseClientMsg(JSON.stringify({ t: 'pour', hopper: 2 }))).toBeNull()
+    expect(parseClientMsg(JSON.stringify({ t: 'buy', upgrade: 'fence' }))).toEqual({ t: 'buy', upgrade: 'fence' })
     expect(parseClientMsg(JSON.stringify({ t: 'treat', issue: 'nails' }))).toEqual({ t: 'treat', issue: 'nails' })
     expect(parseClientMsg(JSON.stringify({ t: 'join', name: '<b>Bo</b>', color: 42 }))).toEqual({ t: 'join', name: 'bBob', color: 0 })
   })

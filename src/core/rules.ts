@@ -37,6 +37,9 @@ export const BITE_HUNGER = 7
 export const FOOD_ROT_MS = 4 * 60_000
 export const MAX_GROUND_FOOD = 80
 export const BOWL_MAX = 24
+/** Pellet hoppers in the barn: farmers fill them a sack at a time; pigs help themselves. */
+export const HOPPER_MAX = 60
+export const SACK_PELLETS = 40
 /** Throws fly for this long plus a bit per metre. */
 export const FLIGHT_BASE_MS = 300
 export const FLIGHT_PER_M_MS = 40
@@ -104,3 +107,29 @@ export const HAWK_CARRY = 2.5
 export const HAWK_SHOO_EXTRA = 3
 /** A carried-off pig turns up at the gate this long after. */
 export const LOST_MS = 40_000
+
+// Money and upgrades
+export const START_COINS = 20
+/** What a day earns: per point of average happiness, per well-fed pig, per fix, per rescue… */
+export const PAY = { happy: 0.6, fed: 1, treat: 5, save: 10, lost: -10, outAtNight: -2, poorly: -2 }
+/** Stars on the day's report card, by coins earned. */
+export const STARS = [40, 70, 100, 130]
+
+export const UPGRADES = {
+  basket: { icon: '🧺', name: 'Bigger basket', cost: 40, desc: 'Carry 24 veg instead of 16' },
+  orchard: { icon: '🍎', name: 'Orchard care', cost: 50, desc: 'Apples fall twice as often' },
+  bighopper: { icon: '🥣', name: 'Bigger hoppers', cost: 60, desc: 'Hoppers hold twice the pellets' },
+  compost: { icon: '🪱', name: 'Compost heap', cost: 60, desc: '+2 veg every harvest' },
+  sprinkler: { icon: '💦', name: 'Garden sprinklers', cost: 70, desc: 'Crops grow 40% faster' },
+  hopper2: { icon: '🏗️', name: 'Second hopper', cost: 80, desc: 'Another pellet hopper in the barn' },
+  heater: { icon: '🔥', name: 'Barn heater', cost: 80, desc: 'Cosy barn: pigs inside are happier' },
+  scarecrow: { icon: '🧑‍🌾', name: 'Scarecrow', cost: 90, desc: 'Hawks come half as often' },
+  fence: { icon: '🛡️', name: 'Fox-proof fence', cost: 120, desc: 'Foxes come half as often and dig in slower' },
+} as const
+export type UpgradeId = keyof typeof UPGRADES
+export const UPGRADE_IDS = Object.keys(UPGRADES) as UpgradeId[]
+
+export const basketMax = (u: readonly UpgradeId[]) => (u.includes('basket') ? 24 : BASKET_MAX)
+export const hopperMax = (u: readonly UpgradeId[]) => (u.includes('bighopper') ? HOPPER_MAX * 2 : HOPPER_MAX)
+export const harvestYield = (u: readonly UpgradeId[]) => HARVEST_YIELD + (u.includes('compost') ? 2 : 0)
+export const growMs = (u: readonly UpgradeId[]) => GROW_MS * (u.includes('sprinkler') ? 0.6 : 1)

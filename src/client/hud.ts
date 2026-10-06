@@ -1,6 +1,6 @@
 import { BREED_NAMES, type PigLook } from '../core/pigs.ts'
-import type { AlertKind, FarmerSnap, PigSnap } from '../core/protocol.ts'
-import { BASKET_MAX, FARMER_COLORS, ISSUE_BIT, NIGHT_START, VEGGIES, type Issue } from '../core/rules.ts'
+import type { AlertKind, FarmerSnap, PigSnap, ServerMsg } from '../core/protocol.ts'
+import { FARMER_COLORS, ISSUE_BIT, NIGHT_START, UPGRADES, UPGRADE_IDS, VEGGIES, type Issue, type UpgradeId } from '../core/rules.ts'
 import { VEG_ICON, VEG_LABEL } from './veg.ts'
 
 const $ = (id: string) => document.getElementById(id)!
@@ -90,14 +90,94 @@ export class Hud {
     if (kind === 'fox' || kind === 'hawk') this.toast(text, 'danger')
   }
 
-  setBasket(counts: number[], selected: number) {
+  setBasket(counts: number[], selected: number, max: number) {
     const total = counts.reduce((a, b) => a + b, 0)
     $('basket').innerHTML =
       VEGGIES.map(
         (v, i) =>
           `<div class="slot ${i === selected ? 'on' : ''} ${counts[i] ? '' : 'empty'}" title="${VEG_LABEL[v]}">` +
           `<small>${i + 1}</small><span>${VEG_ICON[v]}</span><b>${counts[i]}</b></div>`,
-      ).join('') + `<div class="total">🧺 ${total}/${BASKET_MAX}</div>`
+      ).join('') + `<div class="total">🧺 ${total}/${max}</div>`
+  }
+
+  setCoins(coins: number) {
+    const el = $('coins')
+    const text = `🪙 ${coins}`
+    if (el.textContent === text) return
+    if (el.textContent) {
+      el.classList.remove('bump')
+      void el.offsetWidth
+      el.classList.add('bump')
+    }
+    el.textContent = text
+  }
+
+  // ---------------------------------------------------------------- shop
+
+  private shopKey = ''
+
+  get shopOpen() {
+    return !$('shop').hidden
+  }
+
+  toggleShop(open = !this.shopOpen) {
+    $('shop').hidden = !open
+    this.shopKey = ''
+  }
+
+  /** Redraws the shop if it's open and something changed. */
+  updateShop(coins: number, owned: UpgradeId[], buy: (id: UpgradeId) => void) {
+    const el = $('shop')
+    const key = `${coins}|${owned.join()}`
+    if (el.hidden || key === this.shopKey) return
+    this.shopKey = key
+    el.innerHTML = `
+      <h3>Farm shop</h3>
+      <p class="wallet">🪙 <b>${coins}</b> in the farm wallet. Everyone shares it: spend it wisely!</p>
+      <table>${UPGRADE_IDS.map((id) => {
+        const u = UPGRADES[id]
+        const have = owned.includes(id)
+        const button = have
+          ? '<span class="owned">✓ Got it</span>'
+          : `<button data-buy="${id}" ${coins < u.cost ? 'disabled' : ''}>🪙 ${u.cost}</button>`
+        return `<tr class="${have ? 'have' : ''}"><td class="icon">${u.icon}</td><td><b>${u.name}</b><br><small>${u.desc}</small></td><td>${button}</td></tr>`
+      }).join('')}</table>
+      <p class="hint">Earn coins each morning for happy, well-fed piggies. <kbd>B</kbd> to close</p>`
+    el.querySelectorAll<HTMLButtonElement>('button[data-buy]').forEach((b) => b.addEventListener('click', () => buy(b.dataset.buy as UpgradeId)))
+  }
+
+  // ---------------------------------------------------------------- end of day
+
+  private reportTimer = 0
+
+  showReport(r: Extract<ServerMsg, { t: 'report' }>, openShop: () => void) {
+    const el = $('report')
+    const stars = '★'.repeat(r.stars) + '☆'.repeat(5 - r.stars)
+    const verdict = ['Oh dear…', 'Not bad', 'Good day!', 'Great day!', 'Piggy paradise!'][r.stars - 1]
+    el.innerHTML = `
+      <h3>Day ${r.day} done!</h3>
+      <p class="stars">${stars}</p>
+      <p class="verdict">${verdict}</p>
+      <table>${r.lines
+        .map((l) => `<tr><td>${esc(l.label)}</td><td class="${l.coins < 0 ? 'bad' : 'ok'}">${l.coins > 0 ? '+' : ''}${l.coins}</td></tr>`)
+        .join('')}
+        <tr class="sum"><td>Earned today</td><td>🪙 ${r.total}</td></tr>
+      </table>
+      <p class="wallet">Farm wallet: 🪙 <b>${r.coins}</b></p>
+      <div class="buttons"><button id="rp-shop">🛒 Go shopping <kbd>B</kbd></button><button id="rp-ok">Lovely!</button></div>`
+    el.hidden = false
+    const close = () => (el.hidden = true)
+    el.querySelector('#rp-ok')!.addEventListener('click', close)
+    el.querySelector('#rp-shop')!.addEventListener('click', () => {
+      close()
+      openShop()
+    })
+    clearTimeout(this.reportTimer)
+    this.reportTimer = window.setTimeout(close, 25_000)
+  }
+
+  hideReport() {
+    $('report').hidden = true
   }
 
   setPrompt(text: string | null) {

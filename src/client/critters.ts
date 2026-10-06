@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { mat } from './veg.ts'
+import { makeSack } from './world.ts'
 
 const box = new THREE.BoxGeometry(1, 1, 1)
 const sphere = new THREE.SphereGeometry(1, 14, 10)
@@ -59,6 +60,7 @@ export class FarmerModel {
   private readonly arms: THREE.Group[] = []
   private readonly basket = new THREE.Group()
   private readonly basketFill: THREE.Mesh
+  private readonly sack = makeSack()
   private throwT = 1
   private walkPhase = 0
 
@@ -96,6 +98,10 @@ export class FarmerModel {
     this.basket.add(this.basketFill)
     this.basket.position.set(-0.45, 0.85, -0.05)
     r.add(this.basket)
+    // A sack of pellets hugged to the chest.
+    this.sack.position.set(0, 0.85, -0.32)
+    this.sack.rotation.x = 0.15
+    r.add(this.sack)
 
     if (name) {
       const tag = textSprite(name)
@@ -108,8 +114,9 @@ export class FarmerModel {
     this.throwT = 0
   }
 
-  /** `speed` in m/s; `holding` = a pig in its arms; `fill` = how full the basket is (0..1) and the top veg's colour. */
-  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number) {
+  /** `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour. */
+  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false) {
+    this.sack.visible = sack
     this.walkPhase += dt * Math.min(speed, 9) * 2.2
     const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
     this.legs[0].rotation.x = swing

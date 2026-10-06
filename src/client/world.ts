@@ -15,11 +15,15 @@ import {
   HIDEY_D,
   HIDEY_W,
   PIG_HOUSES,
+  COMPOST,
+  FEED_BIN,
+  HOPPERS,
+  SCARECROW,
   TREES,
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BOWL_MAX, NIGHT_START, type Veg } from '../core/rules.ts'
+import { BOWL_MAX, NIGHT_START, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 
 const WALL_H = 2.6
@@ -143,6 +147,55 @@ const roofTex = canvasTexture(
   1,
 )
 
+const pelletTex = canvasTexture(
+  64,
+  (g, s) => {
+    g.fillStyle = '#8a6a3c'
+    g.fillRect(0, 0, s, s)
+    speckle(g, s, 300, ['#6f5430', '#a5824f', '#7d6a2a'], 3, 2)
+  },
+  2,
+)
+
+/** Chicken wire: a diamond grid with see-through gaps. */
+const wireTex = canvasTexture(
+  32,
+  (g, s) => {
+    g.clearRect(0, 0, s, s)
+    g.strokeStyle = '#b8bec6'
+    g.lineWidth = 2
+    g.beginPath()
+    g.moveTo(0, s / 2)
+    g.lineTo(s / 2, 0)
+    g.lineTo(s, s / 2)
+    g.lineTo(s / 2, s)
+    g.closePath()
+    g.stroke()
+  },
+  1,
+)
+
+const sackTex = canvasTexture(
+  64,
+  (g, s) => {
+    g.fillStyle = '#d9c49a'
+    g.fillRect(0, 0, s, s)
+    speckle(g, s, 200, ['#cbb487', '#e4d2ad'], 1)
+    g.fillStyle = '#3cc45a'
+    g.font = 'bold 22px sans-serif'
+    g.textAlign = 'center'
+    g.fillText('PELLETS', s / 2, s / 2 + 8)
+  },
+  1,
+)
+
+/** A sack of pellets (on the feed bin, or in a farmer's arms). */
+export function makeSack(): THREE.Mesh {
+  const geo = new THREE.BoxGeometry(0.5, 0.6, 0.3)
+  geo.translate(0, 0.3, 0) // sits on its bottom
+  return shadowed(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: sackTex })))
+}
+
 const hayTex = canvasTexture(
   64,
   (g, s) => {
@@ -211,6 +264,9 @@ export class World {
   private readonly beds: BedView[] = []
   private readonly bowlFood: { kind: Veg | null; piles: THREE.Group[] }[] = []
   private cutaway = false
+  private readonly hoppers: { root: THREE.Group; body: THREE.Group; fill: THREE.Mesh; tray: THREE.Mesh }[] = []
+  /** Things that appear when an upgrade is bought. */
+  private readonly extras: Partial<Record<UpgradeId, THREE.Object3D>> = {}
 
   constructor() {
     const s = this.scene
@@ -255,6 +311,8 @@ export class World {
       for (let y = 0; y < 2; y++) s.add(boxMesh({ x0: b.x0 + y * 0.1, x1: b.x1 - y * 0.1, z0: b.z0 + y * 0.1, z1: b.z1 - y * 0.1 }, y * 0.7, 0.7, hay))
     }
     this.buildSurroundings()
+    this.buildPellets()
+    this.buildExtras()
 
     this.lampBulbs = new THREE.MeshBasicMaterial({ color: 0xffe6a0 })
     for (const x of [-6, 6]) {
@@ -619,6 +677,180 @@ export class World {
         p.scale.setScalar(Math.max(0.01, grow))
       }
       for (const r of view.ripe) r.visible = b.stage === 'ripe'
+    })
+  }
+
+  private buildPellets() {
+    const s = this.scene
+    const glass = new THREE.MeshLambertMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.35, depthWrite: false })
+    const pellets = new THREE.MeshLambertMaterial({ map: pelletTex })
+    const metal = mat(0x9aa3ad)
+    const red = mat(0xe8453c)
+    for (const h of HOPPERS) {
+      const root = new THREE.Group()
+      root.position.set(h.x, 0, h.z)
+      // A round tray on the floor, pellets in it, and a see-through tank above showing how full it is.
+      const trayGeo = new THREE.LatheGeometry(
+        [new THREE.Vector2(0, 0), new THREE.Vector2(0.6, 0), new THREE.Vector2(0.68, 0.16), new THREE.Vector2(0.62, 0.17), new THREE.Vector2(0.55, 0.05), new THREE.Vector2(0, 0.05)],
+        24,
+      )
+      root.add(shadowed(new THREE.Mesh(trayGeo, metal)))
+      const tray = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20), pellets)
+      tray.position.y = 0.08
+      root.add(tray)
+      const body = new THREE.Group()
+      body.position.y = 0.35
+      for (const a of [0, 2.1, 4.2]) {
+        const leg = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.06), metal))
+        leg.position.set(Math.cos(a) * 0.3, -0.1, Math.sin(a) * 0.3)
+        body.add(leg)
+      }
+      const fill = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1, 16), pellets)
+      body.add(fill)
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.1, 16, 1, true), glass)
+      tank.position.y = 0.55
+      tank.renderOrder = 2
+      body.add(tank)
+      const lid = shadowed(new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.3, 16), red))
+      lid.position.y = 1.25
+      body.add(lid)
+      root.add(body)
+      s.add(root)
+      this.hoppers.push({ root, body, fill, tray })
+    }
+
+    // The feed bin by the door, with sacks of pellets.
+    const bin = new THREE.Group()
+    bin.position.set(FEED_BIN.x, 0, FEED_BIN.z)
+    const wood = new THREE.MeshLambertMaterial({ map: plankTex })
+    const chest = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 0.7), wood))
+    chest.position.y = 0.3
+    bin.add(chest)
+    for (const [x, z, r] of [
+      [-0.35, 0, 0.1],
+      [0.1, 0.05, -0.15],
+      [0.5, -0.05, 0.2],
+    ]) {
+      const sack = makeSack()
+      sack.position.set(x, 0.6, z)
+      sack.rotation.y = r
+      bin.add(sack)
+    }
+    s.add(bin)
+  }
+
+  private buildExtras() {
+    const s = this.scene
+    // Second hopper: built already, just hidden until bought.
+    this.extras.hopper2 = this.hoppers[1].root
+
+    // Scarecrow on the lawn: keeps the hawks away.
+    const crow = new THREE.Group()
+    crow.position.set(SCARECROW.x, 0, SCARECROW.z)
+    const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.4, 6), mat(0x7a5232)))
+    pole.position.y = 1.2
+    const arms = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.08), mat(0x7a5232)))
+    arms.position.y = 1.75
+    const shirt = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.3), mat(0x3c7ee8)))
+    shirt.position.y = 1.55
+    const sleeves = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.2, 0.22), mat(0xe8453c)))
+    sleeves.position.y = 1.75
+    const head = shadowed(new THREE.Mesh(new THREE.SphereGeometry(0.25, 10, 8), mat(0xe8d4a0)))
+    head.position.y = 2.25
+    const brim = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.03, 14), mat(0xe8c66a)))
+    brim.position.y = 2.42
+    const crown = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.2, 14), mat(0xe8c66a)))
+    crown.position.y = 2.52
+    crow.add(pole, arms, shirt, sleeves, head, brim, crown)
+    s.add(crow)
+    this.extras.scarecrow = crow
+
+    // Sprinklers in every bed.
+    const sprinklers = new THREE.Group()
+    const spray = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.35, depthWrite: false })
+    for (const b of BEDS) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.7, 6), mat(0x9aa3ad))
+      post.position.set(b.x, 0.6, b.z)
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), mat(0x3c7ee8))
+      top.position.set(b.x, 0.95, b.z)
+      const mist = new THREE.Mesh(new THREE.ConeGeometry(1.2, 0.6, 16, 1, true), spray)
+      mist.position.set(b.x, 0.75, b.z)
+      mist.rotation.x = Math.PI
+      sprinklers.add(post, top, mist)
+    }
+    s.add(sprinklers)
+    this.extras.sprinkler = sprinklers
+
+    // A glowing heater against the back wall of the barn.
+    const heater = new THREE.Group()
+    heater.position.set(-4, 0, BARN_IN.z0 + 0.35)
+    const box = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.4), mat(0x8a8f96)))
+    box.position.y = 0.4
+    const grille = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.5), new THREE.MeshBasicMaterial({ color: 0xff7a2a }))
+    grille.position.set(0, 0.42, 0.21)
+    heater.add(box, grille)
+    s.add(heater)
+    this.extras.heater = heater
+
+    // Compost heap by the garden.
+    const compost = new THREE.Group()
+    compost.position.set(COMPOST.x, 0, COMPOST.z)
+    const heap = shadowed(new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshLambertMaterial({ map: soilTex })))
+    heap.scale.set(1.1, 0.7, 1.1)
+    compost.add(heap)
+    for (const [x, z, w, d] of [
+      [0, -1.2, 2.6, 0.1],
+      [-1.25, 0, 0.1, 2.4],
+      [1.25, 0, 0.1, 2.4],
+    ]) {
+      const side = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, 0.6, d), new THREE.MeshLambertMaterial({ map: plankTex })))
+      side.position.set(x, 0.3, z)
+      compost.add(side)
+    }
+    s.add(compost)
+    this.extras.compost = compost
+
+    // Wire mesh along the bottom of the fence.
+    const wire = new THREE.Group()
+    const mesh = new THREE.MeshLambertMaterial({ map: wireTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
+    const { x0, x1, z0, z1 } = BOUNDS
+    const run = (ax: number, az: number, bx: number, bz: number) => {
+      const len = Math.hypot(bx - ax, bz - az)
+      const m = mesh.clone()
+      m.map = wireTex.clone()
+      m.map.needsUpdate = true
+      m.map.repeat.set(len / 1, 1)
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.7), m)
+      p.position.set((ax + bx) / 2, 0.35, (az + bz) / 2)
+      p.rotation.y = -Math.atan2(bz - az, bx - ax)
+      wire.add(p)
+    }
+    run(x0 - 0.1, z1 + 0.1, -1.6, z1 + 0.1)
+    run(1.6, z1 + 0.1, x1 + 0.1, z1 + 0.1)
+    run(x0 - 0.1, z0 - 0.1, x0 - 0.1, z1 + 0.1)
+    run(x1 + 0.1, z0 - 0.1, x1 + 0.1, z1 + 0.1)
+    run(x0 - 0.1, z0 - 0.1, BARN_OUTER.x0, z0 - 0.1)
+    run(BARN_OUTER.x1, z0 - 0.1, x1 + 0.1, z0 - 0.1)
+    s.add(wire)
+    this.extras.fence = wire
+
+    this.setUpgrades([])
+  }
+
+  setUpgrades(owned: UpgradeId[]) {
+    for (const [id, obj] of Object.entries(this.extras)) obj.visible = owned.includes(id as UpgradeId)
+    // Bigger hoppers are taller.
+    for (const h of this.hoppers) h.body.scale.y = owned.includes('bighopper') ? 1.4 : 1
+  }
+
+  setHoppers(bites: number[], max: number) {
+    bites.forEach((n, i) => {
+      const h = this.hoppers[i]
+      const level = Math.max(0, Math.min(1, n / max))
+      h.fill.visible = level > 0
+      h.fill.scale.y = Math.max(0.01, level * 1.05)
+      h.fill.position.y = (level * 1.05) / 2
+      h.tray.visible = n > 0
     })
   }
 
