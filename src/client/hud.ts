@@ -7,10 +7,13 @@ import {
   ISSUE_BIT,
   clockHours,
   LAND,
+  LAND_UPGRADES,
   NIGHT_START,
   SHOP_TABS,
   UPGRADES,
   UPGRADE_IDS,
+  level,
+  nextLevel,
   VEGGIES,
   type Issue,
   type ShopTab,
@@ -270,6 +273,7 @@ export class Hud {
     const key = `${coins}|${owned.join()}|${land.join()}|${this.shopTab}`
     if (el.hidden || key === this.shopKey) return
     this.shopKey = key
+    const expanded = new Set([...el.querySelectorAll<HTMLDetailsElement>('details[data-square][open]')].map((d) => d.dataset.square))
     const tabs = (Object.keys(SHOP_TABS) as ShopTab[])
       .map((t) => `<button class="tab ${t === this.shopTab ? 'on' : ''}" data-tab="${t}">${SHOP_TABS[t]}</button>`)
       .join('')
@@ -280,26 +284,46 @@ export class Hud {
         const info = LAND[sq.id]
         const mine = land.includes(sq.id)
         const next = canBuy(sq.id, land)
+        const upgrade = LAND_UPGRADES[sq.id]
+        const tiers = UPGRADES[upgrade].levels
+        const lvl = level(owned, upgrade)
+        const tier = nextLevel(owned, upgrade)
         const action = mine
-          ? '<span class="owned">✓ Yours</span>'
+          ? tier
+            ? `<button data-buy="${upgrade}" ${coins < tier.cost ? 'disabled' : ''} aria-label="Buy ${esc(tier.name!)} for ${tier.cost} coins">Upgrade ${lvl + 1}/3 · 🪙 ${tier.cost}</button>`
+            : '<span class="owned">✓ Fully upgraded</span>'
           : next
-            ? `<button data-land="${sq.id}" ${coins < info.cost ? 'disabled' : ''}>🪙 ${info.cost}</button>`
+            ? `<button data-land="${sq.id}" ${coins < info.cost ? 'disabled' : ''}>Buy land · 🪙 ${info.cost}</button>`
             : '<small>🔒 buy next door first</small>'
-        return `<div class="sq ${mine ? 'mine' : next ? 'next' : 'far'}" title="${esc(info.desc)}"><span class="icon">${info.icon}</span><b>${info.name}</b><small>${mine ? '' : info.desc}</small>${action}</div>`
+        const preview = tiers[lvl] ?? tiers[2]
+        const roadmap = `<details data-square="${sq.id}" ${expanded.has(sq.id) ? 'open' : ''}>
+          <summary>All 3 upgrades</summary>
+          <ol>${tiers.map((t, i) => `<li class="${i < lvl ? 'unlocked' : ''}"><b>${i < lvl ? '✓ ' : ''}${esc(t.name!)}</b> · 🪙 ${t.cost}<small>${esc(t.desc)}</small></li>`).join('')}</ol>
+          <small>Each upgrade keeps the earlier benefits.</small>
+        </details>`
+        return `<div class="sq ${mine ? 'mine' : next ? 'next' : 'far'}">
+          <span class="icon">${info.icon}</span><b>${info.name}</b><small>${info.desc}</small>
+          <span class="land-progress" aria-label="${lvl} of 3 upgrades">${mine ? `${'●'.repeat(lvl)}${'○'.repeat(3 - lvl)} · ${lvl}/3` : 'Land required'}</span>
+          <div class="land-benefit"><b>${!mine ? 'First upgrade: ' : !tier ? 'Complete: ' : 'Next: '}${esc(preview.name!)}</b><small>${esc(preview.desc)}</small></div>
+          ${action}${roadmap}</div>`
       }).join('')}</div>`
     } else {
       const ids = UPGRADE_IDS.filter((id) => UPGRADES[id].tab === this.shopTab)
       body = `<table>${ids
         .map((id) => {
           const u = UPGRADES[id]
-          const have = owned.includes(id)
+          const lvl = level(owned, id)
+          const next = nextLevel(owned, id)
           const missing = u.needs && !land.includes(u.needs) ? u.needs : null
-          const button = have
-            ? '<span class="owned">✓ Got it</span>'
+          const button = !next
+            ? `<span class="owned">✓ ${u.levels.length > 1 ? 'Maxed' : 'Got it'}</span>`
             : missing
               ? `<small>needs ${LAND[missing].icon} ${LAND[missing].name}</small>`
-              : `<button data-buy="${id}" ${coins < u.cost ? 'disabled' : ''}>🪙 ${u.cost}</button>`
-          return `<tr class="${have ? 'have' : ''}"><td class="icon">${u.icon}</td><td><b>${u.name}</b><br><small>${u.desc}</small></td><td>${button}</td></tr>`
+              : `<button data-buy="${id}" ${coins < next.cost ? 'disabled' : ''}>🪙 ${next.cost}</button>`
+          // Levels as pips (●●○), then what the next one does (or the top one, once maxed).
+          const pips = u.levels.length > 1 ? ` <span class="pips">${'●'.repeat(lvl)}${'○'.repeat(u.levels.length - lvl)}</span>` : ''
+          const desc = next ? `${lvl ? 'Next: ' : ''}${next.desc}` : u.levels[lvl - 1].desc
+          return `<tr class="${next ? '' : 'have'}"><td class="icon">${u.icon}</td><td><b>${u.name}</b>${pips}<br><small>${desc}</small></td><td>${button}</td></tr>`
         })
         .join('')}</table>`
     }

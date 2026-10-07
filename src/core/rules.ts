@@ -228,34 +228,120 @@ export const POND_HAPPY = 0.4
 export const SHOP_TABS = { land: '🗺️ Land', barn: '🏠 Barn', garden: '🥕 Garden', critters: '🐹 Critters' } as const
 export type ShopTab = keyof typeof SHOP_TABS
 export interface Upgrade {
-  tab: Exclude<ShopTab, 'land'>
+  tab: ShopTab
   icon: string
   name: string
-  cost: number
-  desc: string
+  /** Each level in turn: what it costs, and what it does. */
+  levels: { cost: number; desc: string; name?: string }[]
   needs?: SquareId
 }
+const lv = (...levels: [number, string][]) => levels.map(([cost, desc]) => ({ cost, desc }))
+/** Each square has three cumulative improvements, separate from the farm-wide equipment. */
+export const LAND_UPGRADES = {
+  barn: 'land_barn', yard: 'land_yard', garden: 'land_garden', meadow: 'land_meadow',
+  orchard: 'land_orchard', huts: 'land_huts', flowers: 'land_flowers', patch2: 'land_patch2', pond: 'land_pond',
+} as const satisfies Record<SquareId, string>
+const landUpgrade = (needs: SquareId, ...tiers: [number, string, string][]): Upgrade => ({
+  tab: 'land', needs, icon: LAND[needs].icon, name: `${LAND[needs].name} improvements`,
+  levels: tiers.map(([cost, name, desc]) => ({ cost, name, desc })),
+})
 const UPGRADE_LIST = {
-  basket: { tab: 'critters', icon: '🧺', name: 'Bigger basket', cost: 40, desc: 'Carry 24 veg instead of 16' },
-  orchard: { tab: 'garden', icon: '🍎', name: 'Orchard care', cost: 50, desc: 'Apples fall twice as often', needs: 'orchard' },
-  bighopper: { tab: 'barn', icon: '🥣', name: 'Bigger hoppers', cost: 60, desc: 'Hoppers hold twice the pellets' },
-  compost: { tab: 'garden', icon: '🪱', name: 'Compost heap', cost: 60, desc: '+2 veg every harvest' },
-  sprinkler: { tab: 'garden', icon: '💦', name: 'Garden sprinklers', cost: 70, desc: 'Crops grow 40% faster' },
-  hopper2: { tab: 'barn', icon: '🏗️', name: 'Second hopper', cost: 80, desc: 'Another pellet hopper in the barn' },
-  heater: { tab: 'barn', icon: '🔥', name: 'Barn heater', cost: 80, desc: 'Cosy barn: pigs inside are happier' },
-  scarecrow: { tab: 'critters', icon: '🧑‍🌾', name: 'Scarecrow', cost: 90, desc: 'Hawks come half as often' },
-  bigbarn: { tab: 'barn', icon: '🐣', name: 'Bigger barn', cost: 110, desc: `Room for ${BIG_BARN_EXTRA} more piggies (${HERD_MAX} now)` },
-  fence: { tab: 'critters', icon: '🛡️', name: 'Fox-proof fence', cost: 120, desc: 'Foxes come half as often and dig in slower' },
+  land_barn: landUpgrade('barn',
+    [45, 'Deep hay racks', 'Each barn rack holds 80 bites of hay instead of 40.'],
+    [95, 'Feed pantry', 'One extra pellet sack every dawn, plus one now.'],
+    [180, 'Snug bedding', 'Sleeping pigs in the barn get hungry half as fast.']),
+  land_yard: landUpgrade('yard',
+    [35, 'Clover lawn', 'Grazing in the yard fills tummies twice as fast.'],
+    [80, 'Play arches', 'Calm pigs in the yard gain 0.3 happiness per second.'],
+    [150, 'Shepherd’s bell', 'Shooing reaches 25% further everywhere, on top of your whistle.']),
+  land_garden: landUpgrade('garden',
+    [50, 'Raised beds', 'Harvest 2 extra veg from each bed in this patch.'],
+    [110, 'Water barrels', 'This patch takes 25% less time to grow each crop.'],
+    [200, 'Seed station', 'Harvesting automatically replants the bed for free.']),
+  land_meadow: landUpgrade('meadow',
+    [55, 'Scythe stand', 'Cut 2 armfuls of hay per patch, if your basket has room.'],
+    [110, 'Hay store', 'Each haystack holds 12 armfuls instead of 6.'],
+    [190, 'Reseeding beds', 'Hay takes 25% less time to regrow, on top of fertiliser.']),
+  land_orchard: landUpgrade('orchard',
+    [55, 'Fruit catchers', 'Each tree can leave 6 apples on the ground instead of 3.'],
+    [115, 'Shade canopies', 'Fallen orchard apples stay fresh twice as long.'],
+    [210, 'Pruning station', 'Two apples fall at a time when there is room.']),
+  land_huts: landUpgrade('huts',
+    [45, 'Soft hut bedding', 'Calm or hiding pigs near these huts gain 0.4 happiness per second.'],
+    [100, 'Hut windbreaks', 'Pigs inside these huts avoid cold and rain penalties and weather sniffles.'],
+    [180, 'Lookout flags', 'Pigs in the hut meadow notice foxes 3 metres further away.']),
+  land_flowers: landUpgrade('flowers',
+    [45, 'Clover beds', 'Grazing among the flowers fills tummies twice as fast.'],
+    [100, 'Dandelion planters', 'Flower grazing gives twice the happiness.'],
+    [190, 'Bee hotel', 'All vegetable beds take 15% less time to grow.']),
+  land_patch2: landUpgrade('patch2',
+    [60, 'Growing cloches', 'This patch takes 25% less time to grow each crop.'],
+    [120, 'Rich soil beds', 'Harvest 3 extra veg from each bed in this patch.'],
+    [220, 'Seed station', 'Harvesting automatically replants the bed for free.']),
+  land_pond: landUpgrade('pond',
+    [50, 'Reed beds', 'The calming area reaches 7 metres from the water instead of 4.'],
+    [105, 'Water lilies', 'Resting near the pond gives twice the happiness.'],
+    [190, 'Herb border', 'New health problems are half as likely in the pond’s calming area.']),
+
+  basket: { tab: 'critters', icon: '🧺', name: 'Bigger basket', levels: lv([40, 'Carry 24 veg instead of 16'], [120, 'Carry 32 veg'], [300, 'Carry 40 veg']) },
+  boots: { tab: 'critters', icon: '🥾', name: 'Go-faster wellies', levels: lv([70, 'Walk and run 12% faster'], [200, 'Walk and run 25% faster']) },
+  whistle: { tab: 'critters', icon: '📯', name: 'Shepherd’s whistle', levels: lv([60, 'Shooing (F) reaches 30% further'], [180, 'Shooing reaches 60% further']) },
+  scarecrow: { tab: 'critters', icon: '🧑‍🌾', name: 'Scarecrow', levels: lv([90, 'Hawks come half as often'], [260, 'Two scarecrows: hawks come a third as often']) },
+  fence: { tab: 'critters', icon: '🛡️', name: 'Fox-proof fence', levels: lv([120, 'Foxes come half as often and dig in slower'], [320, 'Foxes come a third as often and dig in slower still']) },
+  vet: { tab: 'critters', icon: '🩺', name: 'Vet visits', levels: lv([100, 'Health problems start 30% less often'], [280, 'Health problems start half as often']) },
+  orchard: { tab: 'garden', icon: '🍎', name: 'Orchard care', needs: 'orchard', levels: lv([50, 'Apples fall twice as often'], [150, 'Apples fall three times as often'], [350, 'Apples fall four times as often']) },
+  compost: { tab: 'garden', icon: '🪱', name: 'Compost heap', levels: lv([60, '+2 veg every harvest'], [160, '+4 veg every harvest'], [380, '+6 veg every harvest']) },
+  sprinkler: { tab: 'garden', icon: '💦', name: 'Garden sprinklers', levels: lv([70, 'Crops grow 40% faster'], [180, 'Crops grow 55% faster'], [400, 'Crops grow 65% faster']) },
+  fertiliser: { tab: 'garden', icon: '🌾', name: 'Meadow fertiliser', needs: 'meadow', levels: lv([80, 'Hay grows back 30% faster'], [220, 'Hay grows back twice as fast']) },
+  bighopper: { tab: 'barn', icon: '🥣', name: 'Bigger hoppers', levels: lv([60, 'Hoppers hold twice the pellets, and the sacks are twice as big'], [160, 'Three times the pellets, in bigger sacks'], [360, 'Four times the pellets, in bigger sacks']) },
+  hopper2: { tab: 'barn', icon: '🏗️', name: 'Second hopper', levels: lv([80, 'Another pellet hopper in the barn']) },
+  sacks: { tab: 'barn', icon: '📦', name: 'Feed delivery', levels: lv([90, 'An extra sack of pellets every morning'], [250, 'Two extra sacks every morning']) },
+  heater: { tab: 'barn', icon: '🔥', name: 'Barn heater', levels: lv([80, 'Cosy barn: pigs inside are happier'], [200, 'Cosier still'], [420, 'Toasty: pigs inside are much happier']) },
+  toys: { tab: 'barn', icon: '🧸', name: 'Piggy toys', levels: lv([90, 'Tunnels to play in: the zoomometer fills 25% faster'], [240, 'A whole play park: it fills 45% faster']) },
+  nursery: { tab: 'barn', icon: '🍼', name: 'Nursery corner', levels: lv([100, 'Sows are 50% likelier to get pregnant'], [260, 'Sows are twice as likely to get pregnant']) },
+  bigbarn: {
+    tab: 'barn',
+    icon: '🐣',
+    name: 'Bigger barn',
+    levels: lv([110, `Room for ${BIG_BARN_EXTRA} more piggies (${HERD_MAX + BIG_BARN_EXTRA} in all)`], [320, `Room for ${BIG_BARN_EXTRA} more again (${HERD_MAX + 2 * BIG_BARN_EXTRA})`]),
+  },
 } satisfies Record<string, Upgrade>
 export type UpgradeId = keyof typeof UPGRADE_LIST
 export const UPGRADES: Record<UpgradeId, Upgrade> = UPGRADE_LIST
 export const UPGRADE_IDS = Object.keys(UPGRADES) as UpgradeId[]
 
-export const basketMax = (u: readonly UpgradeId[]) => (u.includes('basket') ? 24 : BASKET_MAX)
-export const hopperMax = (u: readonly UpgradeId[]) => (u.includes('bighopper') ? HOPPER_MAX * 2 : HOPPER_MAX)
-export const harvestYield = (u: readonly UpgradeId[]) => HARVEST_YIELD + (u.includes('compost') ? 2 : 0)
-export const growMs = (u: readonly UpgradeId[]) => GROW_MS * (u.includes('sprinkler') ? 0.6 : 1)
-export const herdMax = (u: readonly UpgradeId[]) => HERD_MAX + (u.includes('bigbarn') ? BIG_BARN_EXTRA : 0)
+/** Upgrades come in levels: each level bought is one more of it in the farm's list. */
+export const level = (u: readonly UpgradeId[], id: UpgradeId) => u.reduce((n, x) => n + (x === id ? 1 : 0), 0)
+/** The next level of an upgrade to buy, or null once it's maxed. */
+export const nextLevel = (u: readonly UpgradeId[], id: UpgradeId) => UPGRADES[id].levels[level(u, id)] ?? null
+
+export const landLevel = (u: readonly UpgradeId[], square: SquareId) => level(u, LAND_UPGRADES[square])
+
+export const basketMax = (u: readonly UpgradeId[]) => BASKET_MAX + 8 * level(u, 'basket')
+export const hopperMax = (u: readonly UpgradeId[]) => HOPPER_MAX * (1 + level(u, 'bighopper'))
+/** Bigger hoppers come with bigger sacks to fill them. */
+export const sackPellets = (u: readonly UpgradeId[]) => SACK_PELLETS * (1 + level(u, 'bighopper'))
+export const harvestYield = (u: readonly UpgradeId[], square?: SquareId) => HARVEST_YIELD + 2 * level(u, 'compost')
+  + (square === 'garden' && landLevel(u, 'garden') >= 1 ? 2 : 0)
+  + (square === 'patch2' && landLevel(u, 'patch2') >= 2 ? 3 : 0)
+export const growMs = (u: readonly UpgradeId[], square?: SquareId) => GROW_MS * [1, 0.6, 0.45, 0.35][level(u, 'sprinkler')]
+  * ((square === 'garden' && landLevel(u, 'garden') >= 2) || (square === 'patch2' && landLevel(u, 'patch2') >= 1) ? 0.75 : 1)
+  * (landLevel(u, 'flowers') >= 3 ? 0.85 : 1)
+export const herdMax = (u: readonly UpgradeId[]) => HERD_MAX + BIG_BARN_EXTRA * level(u, 'bigbarn')
+/** How much more often apples fall, hawks and foxes stay away, and so on, by level. */
+export const appleEvery = (u: readonly UpgradeId[]) => [1, 0.5, 0.35, 0.25][level(u, 'orchard')]
+export const hawkEvery = (u: readonly UpgradeId[]) => 1 + level(u, 'scarecrow')
+export const foxEvery = (u: readonly UpgradeId[]) => 1 + level(u, 'fence')
+export const foxDig = (u: readonly UpgradeId[]) => [1, 0.5, 0.35][level(u, 'fence')]
+/** Extra happiness for a pig inside a heated barn. */
+export const cosy = (u: readonly UpgradeId[]) => [0, 10, 16, 22][level(u, 'heater')]
+export const issueRate = (u: readonly UpgradeId[]) => [1, 0.7, 0.5][level(u, 'vet')]
+export const pregnancyRate = (u: readonly UpgradeId[]) => 1 + 0.5 * level(u, 'nursery')
+export const zoomFillMs = (u: readonly UpgradeId[]) => ZOOM_FILL_MS * [1, 0.75, 0.55][level(u, 'toys')]
+export const shooRadius = (u: readonly UpgradeId[]) => SHOO_RADIUS * (1 + 0.3 * level(u, 'whistle')) * (landLevel(u, 'yard') >= 3 ? 1.25 : 1)
+export const farmerSpeed = (u: readonly UpgradeId[]) => [1, 1.12, 1.25][level(u, 'boots')]
+export const extraSacks = (u: readonly UpgradeId[]) => level(u, 'sacks') + (landLevel(u, 'barn') >= 2 ? 1 : 0)
+export const hayRegrowMs = (u: readonly UpgradeId[]) => HAY_REGROW_MS * [1, 0.7, 0.5][level(u, 'fertiliser')] * (landLevel(u, 'meadow') >= 3 ? 0.75 : 1)
 
 // Treat of the day: each morning the pigs crave one veg. A bite of it cheers them up more than usual.
 export const CRAVING_HAPPY = 5
@@ -334,3 +420,19 @@ export const SHOW_EVERY = 3
 export const SHOW_PRIZE = 30
 /** Days until the next show: 0 means it's judged at the end of today. */
 export const daysToShow = (day: number) => (SHOW_EVERY - (day % SHOW_EVERY)) % SHOW_EVERY
+
+/** Local effects for the three land tiers. Rates are per second; distances are metres. */
+export const LAND_BONUS = {
+  sleepHunger: 0.5, cloverGraze: 2, yardHappy: 0.3, flowerHappy: 2,
+  hutHappy: 0.4, hutComfortRadius: 2.5, hutFoxNotice: 3,
+  pondHappy: 2, pondIssueRate: 0.5, appleFreshness: 2, appleDrop: 2,
+} as const
+
+/** Tile benefits shared by the simulation, prompts and world rendering. */
+export const hayRackMax = (u: readonly UpgradeId[]) => HAY_RACK_MAX * (landLevel(u, 'barn') >= 1 ? 2 : 1)
+export const hayStackMax = (u: readonly UpgradeId[]) => HAY_STACK_MAX * (landLevel(u, 'meadow') >= 2 ? 2 : 1)
+export const hayYield = (u: readonly UpgradeId[]) => landLevel(u, 'meadow') >= 1 ? 2 : 1
+export const applesPerTree = (u: readonly UpgradeId[]) => APPLES_PER_TREE * (landLevel(u, 'orchard') >= 1 ? 2 : 1)
+export const pondCalmRadius = (u: readonly UpgradeId[]) => landLevel(u, 'pond') >= 1 ? 7 : 4
+export const autoReplant = (u: readonly UpgradeId[], square: SquareId) =>
+  (square === 'garden' || square === 'patch2') && landLevel(u, square) >= 3

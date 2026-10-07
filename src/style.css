@@ -894,6 +894,11 @@ kbd {
   color: #2f8a3a;
 }
 
+#shop .pips {
+  color: #e0a020;
+  letter-spacing: 1px;
+}
+
 #shop {
   width: min(620px, calc(100vw - 32px));
 }
@@ -918,7 +923,7 @@ kbd {
 
 #shop .landmap {
   display: grid;
-  grid-template-columns: 1fr 1.3fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -1037,4 +1042,24 @@ kbd {
   padding: 0 4px;
   box-shadow: none;
   border-width: 1px;
+}
+
+/* Each land tile keeps its position in the farm map while showing its next improvement. */
+#shop .sq { gap: 6px; min-width: 0; }
+#shop .land-progress { font-size: 12px; font-weight: bold; color: #345326; }
+#shop .land-benefit { width: 100%; padding: 8px 4px; border-top: 1px solid #776d4e; }
+#shop .land-benefit b { font-size: 13px; }
+#shop .land-benefit small, #shop .sq li small { display: block; margin-top: 4px; }
+#shop .sq > button { margin-top: auto; width: 100%; font-size: 13px; padding: 7px 3px; }
+#shop .sq details { width: 100%; font-size: 12px; text-align: left; }
+#shop .sq summary { cursor: pointer; padding: 5px 0; text-align: center; }
+#shop .sq ol { margin: 6px 0; padding-left: 20px; }
+#shop .sq li { margin-bottom: 9px; }
+#shop .sq li.unlocked { color: #254a21; }
+@media (max-width: 540px) {
+  #shop { padding: 12px 8px; }
+  #shop .landmap { gap: 3px; }
+  #shop .sq { padding: 6px 3px; border-width: 2px; }
+  #shop .sq > b { font-size: 13px; }
+  #shop .sq small, #shop .sq > button { font-size: 11px; }
 }

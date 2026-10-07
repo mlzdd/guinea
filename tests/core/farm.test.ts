@@ -19,6 +19,8 @@ import {
   NIGHT_START,
   SACK_PELLETS,
   UPGRADES,
+  basketMax,
+  level,
   farmTime,
   THROW_RANGE,
   TICK_MS,
@@ -652,18 +654,20 @@ describe('hay', () => {
 })
 
 describe('money and upgrades', () => {
-  it('upgrades cost coins from the shared wallet, once each', () => {
+  it('upgrades cost coins from the shared wallet, a level at a time up to the top', () => {
     const { farm, id, me } = setup()
-    farm.coins = UPGRADES.basket.cost - 1
+    const [one, two, three] = UPGRADES.basket.levels
+    farm.coins = one.cost - 1
     farm.handle(id, { t: 'buy', upgrade: 'basket' })
     expect(farm.upgrades).toEqual([])
 
-    farm.coins = UPGRADES.basket.cost + 5
+    farm.coins = one.cost + 5
     farm.handle(id, { t: 'buy', upgrade: 'basket' })
-    farm.handle(id, { t: 'buy', upgrade: 'basket' })
+    farm.handle(id, { t: 'buy', upgrade: 'basket' }) // can't afford level 2
     expect(farm.upgrades).toEqual(['basket'])
     expect(farm.coins).toBe(5)
     expect(farm.snapshot()).toMatchObject({ coins: 5, upgrades: ['basket'] })
+    expect(basketMax(farm.upgrades)).toBe(BASKET_MAX + 8)
 
     // The bigger basket holds more.
     farm.beds[0].stage = 'ripe'
@@ -671,6 +675,36 @@ describe('money and upgrades', () => {
     Object.assign(me, { x: BEDS[0].x + 2, z: BEDS[0].z })
     farm.handle(id, { t: 'harvest', bed: 0 })
     expect(farm.basketCount(me)).toBe(BASKET_MAX - 1 + HARVEST_YIELD)
+
+    // Levels 2 and 3, then it's maxed.
+    farm.coins = two.cost + three.cost + 100
+    for (let i = 0; i < 3; i++) farm.handle(id, { t: 'buy', upgrade: 'basket' })
+    expect(level(farm.upgrades, 'basket')).toBe(3)
+    expect(farm.coins).toBe(100)
+    expect(basketMax(farm.upgrades)).toBe(BASKET_MAX + 24)
+  })
+
+  it('bigger hoppers come with bigger sacks', () => {
+    const { farm, id, me } = setup()
+    farm.upgrades = ['bighopper', 'bighopper']
+    const hopper = farm.foods.get(HOPPER_ID)!
+    hopper.bites = 0
+    Object.assign(me, { x: FEED_BIN.x + 1, z: FEED_BIN.z })
+    farm.handle(id, { t: 'sack' })
+    Object.assign(me, { x: HOPPERS[0].x + 1, z: HOPPERS[0].z })
+    farm.handle(id, { t: 'pour', hopper: 0 })
+    expect(hopper.bites).toBe(SACK_PELLETS * 3)
+  })
+
+  it('feed delivery brings extra sacks each morning, and its first one straight away', () => {
+    const { farm, id } = setup()
+    farm.sacks = 0
+    farm.coins = 1000
+    farm.handle(id, { t: 'buy', upgrade: 'sacks' })
+    expect(farm.sacks).toBe(1)
+    farm.handle(id, { t: 'buy', upgrade: 'sacks' })
+    farm.payDay()
+    expect(farm.sacks).toBe(1 + 2) // the one hopper's sack, and two delivered
   })
 
   it('sprinklers make crops grow faster', () => {
@@ -713,11 +747,13 @@ describe('money and upgrades', () => {
   it('a farm saves its coins, upgrades and pellets', () => {
     const { farm } = setup()
     farm.coins = 123
-    farm.upgrades = ['hopper2', 'fence']
+    farm.upgrades = ['hopper2', 'fence', 'fence', 'fence']
     farm.foods.get(HOPPER_ID + 1)!.bites = 17
     const again = new Farm(seeded(5), JSON.parse(JSON.stringify(farm.save())))
     expect(again.coins).toBe(123)
-    expect(again.upgrades).toEqual(['hopper2', 'fence'])
+    // Levels kept, but no more than there are (the fence has two).
+    expect(level(again.upgrades, 'fence')).toBe(2)
+    expect(level(again.upgrades, 'hopper2')).toBe(1)
     expect(again.foods.get(HOPPER_ID + 1)!.bites).toBe(17)
   })
 })

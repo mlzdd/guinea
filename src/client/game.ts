@@ -7,9 +7,10 @@ import {
   EMOTES,
   FARMER_COLORS,
   HAY_ARMFUL,
-  HAY_RACK_MAX,
+  hayRackMax,
+  hayYield,
   HAY_SLOTS,
-  HAY_STACK_MAX,
+  hayStackMax,
   LAND,
   NIGHT_START,
   PUP_DAYS,
@@ -19,7 +20,9 @@ import {
   SALAD_MAX,
   SALAD_MIN,
   RUN_SPEED,
-  SHOO_RADIUS,
+  HAWK_SHOO_EXTRA,
+  farmerSpeed,
+  shooRadius,
   THROW_RANGE,
   VEG_BITES,
   VEGGIES,
@@ -434,6 +437,7 @@ export class Game {
     this.world.setBowls(snap.bowls)
     this.world.setSalad(snap.salad.veg, snap.salad.bites)
     this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
+    this.world.setUpgrades(snap.upgrades)
     this.world.setRacks(snap.racks)
     this.world.setHayField(snap.hayField)
     this.world.setStacks(snap.stacks)
@@ -441,7 +445,6 @@ export class Game {
     // The map's fences and solids follow the farm's land, for walking about here too.
     setLand(snap.land)
     this.world.setLand(snap.land)
-    this.world.setUpgrades(snap.upgrades)
     this.world.setDoor(snap.door)
     this.world.setRain(snap.rain)
     this.hud.setCoins(snap.coins)
@@ -576,7 +579,7 @@ export class Game {
     const dz = right.z * mv.x + fwd.z * mv.y
     const len = Math.hypot(dx, dz)
     const run = this.input.down('ShiftLeft', 'ShiftRight') && holding === null
-    const speed = len > 0 ? (run ? RUN_SPEED : WALK_SPEED) / len : 0
+    const speed = len > 0 ? ((run ? RUN_SPEED : WALK_SPEED) * farmerSpeed(this.snap.upgrades)) / len : 0
 
     // Momentum, jumping and falling: anything lower than your feet doesn't get in the way, and you land on whatever's under you.
     const { airborne } = moveFarmer(this.me, { x: dx * speed, z: dz * speed }, this.jumpQueued, dt)
@@ -946,8 +949,8 @@ export class Game {
       if (stack >= 0) {
         const n = snap.stacks[stack]
         if (sack) offer({ label: 'Hands full (pellet sack)', msg: null, d: 0.4 })
-        else if (hay && n < HAY_STACK_MAX)
-          offer({ label: `Stack your hay 🌾 (${Math.min(HAY_STACK_MAX, n + hay)}/${HAY_STACK_MAX})`, msg: { t: 'stack', stack }, d: 0.4 })
+        else if (hay && n < hayStackMax(snap.upgrades))
+          offer({ label: `Stack your hay 🌾 (${Math.min(hayStackMax(snap.upgrades), n + hay)}/${hayStackMax(snap.upgrades)})`, msg: { t: 'stack', stack }, d: 0.4 })
         else if (hay) offer({ label: 'This haystack’s full: try another, or take your hay to the racks in the barn', msg: null, d: 0.4 })
         else if (n > 0 && hayRoom)
           offer({ label: `Take hay for the racks (${Math.min(n, Math.floor((max - used) / HAY_SLOTS))} of ${n} armfuls)`, msg: { t: 'stack', stack }, d: 0.4 })
@@ -960,14 +963,17 @@ export class Game {
         const grown = snap.hayField[patch]
         if (sack) offer({ label: 'Hands full (pellet sack)', msg: null, d: 0.5 })
         else if (grown >= 1 && !hayRoom) offer({ label: `Basket full (${hay} armfuls of hay): stack it or take it to the racks`, msg: null, d: 0.5 })
-        else if (grown >= 1) offer({ label: `Cut an armful of hay 🌾${hay ? ` (${hay} in your basket)` : ''}`, msg: { t: 'hay', patch }, d: 0.5 })
+        else if (grown >= 1) {
+          const cut = Math.min(hayYield(snap.upgrades), Math.floor((max - used) / HAY_SLOTS))
+          offer({ label: `Cut ${cut} armful${cut === 1 ? '' : 's'} of hay 🌾${hay ? ` (${hay} in your basket)` : ''}`, msg: { t: 'hay', patch }, d: 0.5 })
+        }
         else offer({ label: `This hay’s still growing (${Math.round(grown * 100)}%): try another patch`, msg: null, d: 0.5 })
       }
       HAY_RACKS.forEach((r, i) => {
         const d = dist(me, r)
         if (d > reach) return
-        const level = `${Math.round((snap.racks[i] / HAY_RACK_MAX) * 100)}% full`
-        if (hay) offer(snap.racks[i] >= HAY_RACK_MAX ? { label: 'This hay rack is full', msg: null, d: d - 1 } : { label: `Put your hay in the rack (${level})`, msg: { t: 'rack', rack: i }, d: d - 1.5 })
+        const level = `${Math.round((snap.racks[i] / hayRackMax(snap.upgrades)) * 100)}% full`
+        if (hay) offer(snap.racks[i] >= hayRackMax(snap.upgrades) ? { label: 'This hay rack is full', msg: null, d: d - 1 } : { label: `Put your hay in the rack (${level})`, msg: { t: 'rack', rack: i }, d: d - 1.5 })
         else if (!snap.land.includes('meadow')) offer({ label: `Hay rack ${level}: hay comes from the 🌾 hay meadow (buy it in the shop, B)`, msg: null, d: d - 1 })
         else offer({ label: `Hay rack ${level}: grab an armful from the 🌾 hay meadow`, msg: null, d: d - 1 })
       })
@@ -1016,7 +1022,7 @@ export class Game {
     const a = best as Action | null
     if (a) lines.push(a.msg ? `<kbd>E</kbd> ${a.label}` : a.label)
     for (const p of this.preds.values()) {
-      if (p.snap.s !== 'flee' && dist(me, p) < SHOO_RADIUS + (p.snap.kind === 'hawk' ? 3 : 0)) {
+      if (p.snap.s !== 'flee' && dist(me, p) < shooRadius(snap.upgrades) + (p.snap.kind === 'hawk' ? HAWK_SHOO_EXTRA : 0)) {
         lines.unshift(`<kbd>F</kbd> <b class="shoo">SHOO the ${p.snap.kind}!</b>`)
         break
       }

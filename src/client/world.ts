@@ -35,7 +35,7 @@ import {
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BOWL_MAX, HAY_RACK_MAX, HAY_STACK_MAX, LAND, NIGHT_START, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
+import { BOWL_MAX, hayRackMax, hayStackMax, LAND_UPGRADES, UPGRADES, landLevel, LAND, NIGHT_START, level, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 
 const WALL_H = 2.6
@@ -346,6 +346,7 @@ export class World {
   private cutaway = false
   private readonly hoppers: { root: THREE.Group; body: THREE.Group; fill: THREE.Mesh; tray: THREE.Mesh }[] = []
   /** Things that appear when an upgrade is bought. */
+  private readonly landFeatures = {} as Record<SquareId, THREE.Group[]>
   private readonly extras: Partial<Record<UpgradeId, THREE.Object3D>> = {}
   /** Each square's things (shown once it's bought), and its long grass and for-sale sign (until then). */
   private readonly content = {} as Record<SquareId, THREE.Group>
@@ -435,6 +436,7 @@ export class World {
     this.buildSurroundings()
     this.buildPellets()
     this.buildSaladStation()
+    this.buildLandImprovements()
     this.buildExtras()
     this.rain = this.buildRain()
 
@@ -621,7 +623,7 @@ export class World {
     armfuls.forEach((n, i) => {
       const s = this.stacks[i]
       if (!s) return
-      const k = n / HAY_STACK_MAX
+      const k = n / hayStackMax(this.owned)
       s.visible = n > 0
       s.scale.set(0.6 + 0.6 * k, 0.4 + 1.3 * k, 0.6 + 0.6 * k)
     })
@@ -1293,6 +1295,139 @@ export class World {
     this.setUpgrades([])
   }
 
+  /** Small decorations illustrate each cumulative land benefit; none obstructs a path. */
+  private buildLandImprovements() {
+    const wood = 0x98683e
+    const straw = 0xd6bd68
+    for (const sq of SQUARES) {
+      this.landFeatures[sq.id] = [1, 2, 3].map((tier) => {
+        const g = new THREE.Group()
+        const box = (x: number, y: number, z: number, w: number, h: number, d: number, color: number) => {
+          const m = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color)))
+          m.position.set(x, y, z)
+          g.add(m)
+          return m
+        }
+        const disc = (x: number, y: number, z: number, radius: number, height: number, color: number) => {
+          const m = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 12), mat(color)))
+          m.position.set(x, y, z)
+          g.add(m)
+        }
+        const planter = (x: number, z: number, color: number) => {
+          box(x, 0.12, z, 1.4, 0.24, 0.65, wood)
+          box(x, 0.25, z, 1.2, 0.06, 0.5, 0x544030)
+          for (const dx of [-0.4, 0, 0.4]) {
+            box(x + dx, 0.4, z, 0.05, 0.3, 0.05, 0x448b40)
+            disc(x + dx, 0.55, z, 0.17, 0.06, color)
+          }
+        }
+        const flag = (x: number, z: number) => {
+          box(x, 1.3, z, 0.07, 2.6, 0.07, wood)
+          box(x + 0.3, 2.35, z, 0.6, 0.35, 0.04, 0xeac84c)
+        }
+        if (sq.id === 'barn') {
+          if (tier === 1) for (const r of HAY_RACKS) {
+            box(r.x, 1.05, r.z, 1.9, 0.09, 0.08, wood)
+            for (const dx of [-0.9, 0.9]) box(r.x + dx, 0.85, r.z, 0.08, 0.5, 0.1, wood)
+          }
+          if (tier === 2) for (const x of [6.8, 7.6]) box(x, 0.4, -11.1, 0.65, 0.8, 0.55, straw)
+          if (tier === 3) for (const h of PIG_HOUSES) box(h.x, 0.06, h.z + 0.45, 1.8, 0.12, 1.2, 0xe6bb8d)
+        } else if (sq.id === 'yard') {
+          if (tier === 1) for (let n = 0; n < 22; n++) {
+            const x = -10 + (n % 6) * 1.6, z = -5 + Math.floor(n / 6) * 1.6
+            for (const dx of [-0.08, 0.08]) disc(x + dx, 0.035, z, 0.13, 0.035, 0x3c873e)
+          }
+          if (tier === 2) for (const x of [-5, -2]) {
+            box(x - 0.7, 0.45, 2, 0.12, 0.9, 0.2, 0xe88d63)
+            box(x + 0.7, 0.45, 2, 0.12, 0.9, 0.2, 0xe88d63)
+            box(x, 0.9, 2, 1.5, 0.15, 0.3, 0xf1c758)
+          }
+          if (tier === 3) {
+            box(-2.8, 1.1, -7, 0.12, 2.2, 0.12, wood)
+            box(-2.4, 2.15, -7, 0.85, 0.12, 0.12, wood)
+            disc(-2.1, 1.8, -7, 0.24, 0.35, 0xe8bd49)
+          }
+        } else if (sq.id === 'garden' || sq.id === 'patch2') {
+          const beds = BEDS.filter((b) => b.square === sq.id)
+          if ((sq.id === 'garden' && tier === 1) || (sq.id === 'patch2' && tier === 2)) for (const b of beds) {
+            for (const dx of [-1.3, 1.3]) box(b.x + dx, 0.14, b.z, 0.1, 0.28, BED_D, wood)
+          }
+          if (sq.id === 'garden' && tier === 2) for (const z of [-4, 4]) disc(-27.8, 0.5, z, 0.45, 1, 0x548eac)
+          if (sq.id === 'patch2' && tier === 1) for (const b of beds) {
+            for (const z of [b.z - 1.8, b.z + 1.8]) {
+              const hoop = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.035, 4, 16, Math.PI), mat(0x8fbdb8))
+              hoop.position.set(b.x, 0.12, z)
+              g.add(hoop)
+            }
+          }
+          if (tier === 3) {
+            const x = sq.id === 'garden' ? -22 : 22, z = sq.id === 'garden' ? -5.5 : -23.5
+            box(x, 0.6, z, 1.5, 0.12, 0.65, wood)
+            for (const dx of [-0.6, 0.6]) box(x + dx, 0.3, z, 0.1, 0.6, 0.5, wood)
+            for (const dx of [-0.4, 0, 0.4]) box(x + dx, 0.77, z, 0.25, 0.22, 0.3, straw)
+          }
+        } else if (sq.id === 'meadow') {
+          if (tier === 1) {
+            box(-30.5, 0.7, -10.3, 0.09, 1.4, 0.09, wood)
+            box(-30.1, 1.35, -10.3, 0.8, 0.08, 0.12, 0xb5c3c6)
+          }
+          if (tier === 2) for (const p of HAY_STACKS) {
+            box(p.x, 0.08, p.z, 2.6, 0.16, 2.7, wood)
+            for (const dx of [-1.2, 1.2]) box(p.x + dx, 0.45, p.z, 0.1, 0.9, 2.7, wood)
+          }
+          if (tier === 3) for (const x of [-24, -21, -18]) planter(x, -9.4, straw)
+        } else if (sq.id === 'orchard') {
+          for (const t of TREES) {
+            if (tier === 1) for (const dz of [-0.45, 0.45]) box(t.x + 1.15, 0.12, t.z + dz, 1, 0.2, 0.07, wood)
+            if (tier === 2) {
+              box(t.x + 1.15, 0.85, t.z, 1.3, 0.05, 1.2, 0x86ab64)
+              for (const dx of [0.6, 1.7]) box(t.x + dx, 0.4, t.z, 0.04, 0.8, 0.04, wood)
+            }
+          }
+          if (tier === 3) {
+            box(14, 0.45, 3, 0.12, 0.9, 1.2, wood)
+            for (const dz of [-0.35, 0.35]) box(14, 0.9, 3 + dz, 0.6, 0.06, 0.1, 0xb5c3c6)
+          }
+        } else if (sq.id === 'huts') {
+          for (const h of HIDEYS.filter((h) => h.square === 'huts')) {
+            if (tier === 1) box(h.x, 0.045, h.z + 0.4, 1.6, 0.09, 1.6, straw)
+            if (tier === 2) {
+              box(h.x, 0.6, h.z - 0.8, 2, 1.2, 0.08, 0x789266)
+              box(h.x - 1, 0.6, h.z, 0.08, 1.2, 1.6, 0x789266)
+            }
+            if (tier === 3) flag(h.x + 1.2, h.z - 0.5)
+          }
+        } else if (sq.id === 'flowers') {
+          if (tier <= 2) for (const x of [16, 19, 22]) planter(x, tier === 1 ? 11 : 13, tier === 1 ? 0x81b66c : 0xf3d454)
+          if (tier === 3) {
+            box(28, 0.6, 12, 0.1, 1.2, 0.1, wood)
+            box(28, 1.25, 12, 1, 0.8, 0.5, straw)
+            for (const dx of [-0.3, 0, 0.3]) for (const y of [1.1, 1.4]) box(28 + dx, y, 12.26, 0.15, 0.12, 0.02, 0x5b4430)
+          }
+        } else if (sq.id === 'pond') {
+          if (tier === 1) for (let n = 0; n < 12; n++) {
+            const x = -26 + n * 0.7
+            box(x, 0.4, 19.8, 0.05, 0.8, 0.05, 0x68964a)
+            box(x, 0.82, 19.8, 0.1, 0.22, 0.1, 0x80623c)
+          }
+          if (tier === 2) for (const [x, z] of [[-24, 16], [-20, 18], [-25, 18]]) {
+            disc(x, 0.045, z, 0.45, 0.025, 0x488e52)
+            disc(x, 0.09, z, 0.17, 0.07, 0xf4b1cc)
+          }
+          if (tier === 3) for (const x of [-25, -22, -19]) planter(x, 21.3, 0xb299cc)
+        }
+        // Small labels at the square edge identify the purchased additions.
+        const name = UPGRADES[LAND_UPGRADES[sq.id]].levels[tier - 1].name!
+        const sign = this.sign(name, 2.6, 0.38)
+        sign.position.set(sq.x0 + 2 + (tier - 1) * 3, 0.5, sq.id === 'barn' ? -24.8 : sq.z1 - 0.7)
+        g.add(sign)
+        g.visible = false
+        this.content[sq.id].add(g)
+        return g
+      })
+    }
+  }
+
   /** The farm grew: show the squares it owns, put for-sale signs on the ones it could buy next, move the fence. */
   setLand(land: SquareId[]) {
     if (land.length === this.land.length && land.every((id) => this.land.includes(id))) return
@@ -1322,15 +1457,18 @@ export class World {
 
   setUpgrades(owned: UpgradeId[]) {
     this.owned = [...owned]
+    for (const sq of SQUARES) this.landFeatures[sq.id].forEach((g, i) => {
+      g.visible = this.land.includes(sq.id) && landLevel(owned, sq.id) > i
+    })
     for (const [id, obj] of Object.entries(this.extras)) obj.visible = owned.includes(id as UpgradeId)
     for (const sq of SQUARES) this.sprinklers[sq.id].visible = owned.includes('sprinkler') && this.land.includes(sq.id)
     // Bigger hoppers are taller.
-    for (const h of this.hoppers) h.body.scale.y = owned.includes('bighopper') ? 1.4 : 1
+    for (const h of this.hoppers) h.body.scale.y = 1 + 0.25 * level(owned, 'bighopper')
   }
 
   setRacks(bites: number[]) {
     bites.forEach((n, i) => {
-      const k = Math.max(0, Math.min(1, n / HAY_RACK_MAX))
+      const k = Math.max(0, Math.min(1, n / hayRackMax(this.owned)))
       const r = this.racks[i]
       r.hay.visible = k > 0
       r.hay.scale.y = Math.max(0.05, k)
