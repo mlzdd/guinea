@@ -45,6 +45,23 @@ describe('feeding', () => {
     expect(pig.hunger).toBeGreaterThan(45)
   })
 
+  it('an armful of hay can be dropped on the ground, and a hungry pig eats it', () => {
+    const { farm, id, me } = setup()
+    const pig = lonePig(farm, 6, 6)
+    Object.assign(me, { x: 0, z: 6 })
+    farm.handle(id, { t: 'throw', veg: 'hay', x: 0.7, z: 6 })
+    expect(farm.out.some((o) => o.msg.t === 'thrown')).toBe(false) // no hay on you
+    me.hay = 1
+    farm.handle(id, { t: 'throw', veg: 'hay', x: 0.7, z: 6 })
+    expect(me.hay).toBe(0)
+    const pile = [...farm.foods.values()].find((f) => !f.bowl)!
+    expect(pile.kind).toBe('hay')
+    expect(pile.bites).toBe(HAY_ARMFUL)
+    expect(run(farm, 4000, () => pig.state === 'eat' && pig.food === pile.id)).toBe(true)
+    expect(farm.snapshot().foods.some((f) => f.kind === 'hay')).toBe(true)
+    expect(parseClientMsg(JSON.stringify({ t: 'throw', veg: 'hay', x: 1, z: 2 }))).toEqual({ t: 'throw', veg: 'hay', x: 1, z: 2 })
+  })
+
   it('throws need veg in the basket, are capped at throwing range and land where pigs can reach', () => {
     const { farm, id, me } = setup()
     Object.assign(me, { x: 0, z: 0 })

@@ -92,8 +92,17 @@ export class Hud {
   private checked = new Map<Check, number>() // when each check finishes
   private lastAlert = new Map<string, number>()
 
+  /** A basket slot was clicked (veg index, or VEGGIES.length for the hay). */
+  onSlot: (i: number) => void = () => {}
+
   constructor() {
     $('hud').hidden = false
+    $('basket').addEventListener('pointerdown', (e) => {
+      const slot = (e.target as HTMLElement).closest<HTMLElement>('.slot')
+      if (!slot) return
+      e.preventDefault()
+      this.onSlot(Number(slot.dataset.i))
+    })
   }
 
   setClock(day: number, time: number) {
@@ -217,10 +226,13 @@ export class Hud {
     $('basket').innerHTML =
       VEGGIES.map(
         (v, i) =>
-          `<div class="slot ${i === selected ? 'on' : ''} ${counts[i] ? '' : 'empty'}" title="${VEG_LABEL[v]}">` +
+          `<div class="slot ${i === selected ? 'on' : ''} ${counts[i] ? '' : 'empty'}" data-i="${i}" title="${VEG_LABEL[v]}: click to hold, again to drop one">` +
           `<small>${i + 1}</small><span>${VEG_ICON[v]}</span><b>${counts[i]}</b></div>`,
       ).join('') +
-      (hay ? `<div class="slot hay" title="Hay (each armful takes ${HAY_SLOTS} places)"><span>🌾</span><b>${hay}</b></div>` : '') +
+      (hay
+        ? `<div class="slot hay ${selected === VEGGIES.length ? 'on' : ''}" data-i="${VEGGIES.length}" title="Hay (each armful takes ${HAY_SLOTS} places): click to hold, again to drop an armful">` +
+          `<span>🌾</span><b>${hay}</b></div>`
+        : '') +
       `<div class="total">🧺 ${total}/${max}</div>`
   }
 

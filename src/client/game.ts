@@ -6,10 +6,12 @@ import {
   BOWL_MAX,
   EMOTES,
   FARMER_COLORS,
+  HAY_ARMFUL,
   HAY_RACK_MAX,
   HAY_SLOTS,
   HAY_STACK_MAX,
   LAND,
+  NIGHT_START,
   PUP_DAYS,
   REACH,
   SALAD_FROM,
@@ -34,10 +36,16 @@ import { Bubbles, type BubbleStyle } from './bubbles.ts'
 import { FarmerModel, FoxModel, HawkModel } from './critters.ts'
 import { Hud, mood } from './hud.ts'
 import { Input } from './input.ts'
+import { setNight } from './music.ts'
 import type { Net } from './net.ts'
 import { PigModel } from './pig.ts'
 import { VEG_ICON, VEG_LABEL, makeVeg } from './veg.ts'
-import { World } from './world.ts'
+import { World, makeHay } from './world.ts'
+
+/** `selected` for the hay slot (after the veg). */
+const HAY_SLOT = VEGGIES.length
+
+const makeFood = (kind: Veg | 'hay') => (kind === 'hay' ? makeHay() : makeVeg(kind))
 
 type Snap = Extract<ServerMsg, { t: 'snap' }>
 
@@ -128,7 +136,7 @@ export class Game {
 
   private readonly me = { x: 0, y: 0, z: -5, vx: 0, vy: 0, vz: 0, yaw: 0, speed: 0, model: null as FarmerModel | null }
   private jumpQueued = false
-  private camYaw = 0
+  private readonly camYaw = 0 // the camera never turns
   private camDist = 22
   private readonly camTarget = new THREE.Vector3()
 
@@ -161,7 +169,9 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.bubbles = new Bubbles(this.world.scene)
     this.input = new Input(canvas)
-    this.input.onClick = () => this.throwVeg()
+    this.input.onClick = () => this.act()
+    this.input.onThrow = () => this.throwVeg()
+    this.hud.onSlot = (i) => this.slot(i)
     this.input.onKey = (code) => this.key(code)
 
     this.cursor = new THREE.Mesh(
@@ -269,7 +279,7 @@ export class Game {
       case 'snap':
         return this.applySnap(msg)
       case 'thrown': {
-        const obj = makeVeg(msg.kind)
+        const obj = makeFood(msg.kind)
         this.world.scene.add(obj)
         this.flying.push({
           obj,
@@ -374,13 +384,13 @@ export class Game {
       here.add(f.id)
       let obj = this.foods.get(f.id)
       if (!obj) {
-        obj = makeVeg(f.kind)
+        obj = makeFood(f.kind)
         obj.position.set(f.x, 0, f.z)
         obj.rotation.y = f.id * 1.7
         this.world.scene.add(obj)
         this.foods.set(f.id, obj)
       }
-      obj.scale.setScalar(0.55 + (0.45 * f.bites) / VEG_BITES[f.kind])
+      obj.scale.setScalar(0.55 + (0.45 * f.bites) / (f.kind === 'hay' ? HAY_ARMFUL : VEG_BITES[f.kind]))
     }
     for (const [id, obj] of this.foods) {
       if (!here.has(id)) {
@@ -433,7 +443,9 @@ export class Game {
     this.hud.setToday(snap.craving, daysToShow(snap.day), snap.rain, snap.zoom)
     this.hud.setJobs(snap.jobs)
     this.hud.setClock(snap.day, snap.time)
+    setNight(snap.time >= NIGHT_START)
     this.hud.setStats(snap.pigs, snap.pigs.filter((p) => p.s !== 'lost' && isInside(p)).length, snap.pigs.length)
+    if (this.selected === HAY_SLOT && this.hayArmfuls() <= 0) this.selected = 0
     this.hud.setBasket(this.basket(), this.selected, this.basketMax(), this.hayArmfuls())
   }
 
@@ -451,12 +463,9 @@ export class Game {
   private key(code: string) {
     if (code.startsWith('Digit')) {
       const i = Number(code.slice(5)) - 1
-      if (i >= 0 && i < VEGGIES.length) {
-        this.selected = i
-        this.hud.setBasket(this.basket(), this.selected, this.basketMax(), this.hayArmfuls())
-      }
+      if (i >= 0 && i < VEGGIES.length) this.select(i)
     } else if (code === 'KeyE') {
-      if (this.action?.msg) this.send(this.action.msg)
+      this.act()
     } else if (code === 'KeyF') {
       this.send({ t: 'shoo' })
       if (this.me.model) this.bubbles.say(this.me.model.root, pickOne(['SHOO!', 'GO ON, SHOO!', 'OI! SHOO!']), 'shoo', 2.6, 0.8)
@@ -488,7 +497,24 @@ export class Game {
     this.send({ t: 'diary' })
   }
 
-  private throwVeg() {
+  /** E or left click: whatever the prompt offers. */
+  private act() {
+    if (this.action?.msg) this.send(this.action.msg)
+  }
+
+  private select(i: number) {
+    this.selected = i
+    this.hud.setBasket(this.basket(), this.selected, this.basketMax(), this.hayArmfuls())
+  }
+
+  /** A basket slot was clicked: take that in hand, or if it already is, drop one at your feet. */
+  private slot(i: number) {
+    if (i !== this.selected) return this.select(i)
+    const ahead = facing(this.me.yaw)
+    this.throwVeg({ x: this.me.x + ahead.x * 0.7, z: this.me.z + ahead.z * 0.7 })
+  }
+
+  private throwVeg(at: { x: number; z: number } = this.aim) {
     if (!this.snap || this.clock - this.lastThrow < THROW_COOLDOWN) return
     if (this.holding() !== null) {
       this.hud.toast('Put the piggy down first (E)')
@@ -496,6 +522,17 @@ export class Game {
     }
     if (this.hasSack()) {
       this.hud.toast('Pour that sack into a hopper first (E)')
+      return
+    }
+    if (this.selected === HAY_SLOT) {
+      if (this.hayArmfuls() <= 0) {
+        this.selected = 0
+        this.hud.toast('No hay on you! Cut some in the hay meadow 🌾 or take some off a haystack')
+        return
+      }
+      this.lastThrow = this.clock
+      this.me.yaw = yawTowards(this.me, at)
+      this.send({ t: 'throw', veg: 'hay', x: at.x, z: at.z })
       return
     }
     const basket = this.basket()
@@ -508,8 +545,8 @@ export class Game {
       this.selected = other
     }
     this.lastThrow = this.clock
-    this.me.yaw = yawTowards(this.me, { x: this.aim.x, z: this.aim.z })
-    this.send({ t: 'throw', veg: VEGGIES[this.selected], x: this.aim.x, z: this.aim.z })
+    this.me.yaw = yawTowards(this.me, at)
+    this.send({ t: 'throw', veg: VEGGIES[this.selected], x: at.x, z: at.z })
   }
 
   // ---------------------------------------------------------------- the frame
@@ -522,8 +559,7 @@ export class Game {
     }
     const holding = this.holding()
 
-    // Camera turn and zoom
-    this.camYaw += this.input.takeTurn()
+    // Camera zoom (it never turns)
     this.camDist = Math.max(10, Math.min(38, this.camDist + this.input.takeZoom() * 2))
 
     // Walk relative to the camera.
@@ -939,7 +975,7 @@ export class Game {
         if (d > reach) return
         if (count === 0) offer({ label: 'Bowl: bring veg to fill it', msg: null, d: d - 1 })
         else if (snap.bowls[i].bites >= BOWL_MAX) offer({ label: 'Bowl is full', msg: null, d: d - 1 })
-        else offer({ label: `Fill the bowl with ${VEG_ICON[VEGGIES[basket[this.selected] > 0 ? this.selected : basket.findIndex((n) => n > 0)]]}`, msg: { t: 'fill', bowl: i, veg: VEGGIES[this.selected] }, d: d - 1 })
+        else offer({ label: `Fill the bowl with ${VEG_ICON[VEGGIES[basket[this.selected] > 0 ? this.selected : basket.findIndex((n) => n > 0)]]}`, msg: { t: 'fill', bowl: i, veg: VEGGIES[this.selected] ?? VEGGIES[0] }, d: d - 1 })
       })
       BEDS.forEach((b, i) => {
         const rect = { x0: b.x - BED_W / 2, x1: b.x + BED_W / 2, z0: b.z - BED_D / 2, z1: b.z + BED_D / 2 }
@@ -955,7 +991,7 @@ export class Game {
       })
       for (const f of snap.foods) {
         const d = dist(me, f)
-        if (d < reach && used < max) offer({ label: `Pick up the ${VEG_LABEL[f.kind].toLowerCase()}`, msg: { t: 'gather', food: f.id }, d: d + 0.3 })
+        if (f.kind !== 'hay' && d < reach && used < max) offer({ label: `Pick up the ${VEG_LABEL[f.kind].toLowerCase()}`, msg: { t: 'gather', food: f.id }, d: d + 0.3 })
       }
       for (const v of this.pigs) {
         const s = v.snap.s

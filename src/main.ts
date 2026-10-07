@@ -5,10 +5,14 @@ import { PigModel } from './client/pig.ts'
 import { makePigLooks } from './core/pigs.ts'
 import type { ServerMsg } from './core/protocol.ts'
 import { FARMER_COLORS } from './core/rules.ts'
+import { startMusic } from './client/music.ts'
 import './style.css'
 
 const NAME_KEY = 'guinea.name'
 const COLOR_KEY = 'guinea.color'
+
+// Day music from the lobby on (it starts on the first click or key press if the browser waits for one).
+startMusic()
 
 const form = document.getElementById('join') as HTMLFormElement
 const button = form.querySelector('button')!
@@ -149,5 +153,7 @@ form.addEventListener('submit', (e) => {
   }
   button.disabled = true
   error.textContent = ''
+  // Play during the join gesture so browsers can allow audible playback.
+  startMusic()
   net.send({ t: 'join', name, color })
 })

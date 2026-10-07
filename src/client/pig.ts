@@ -1,13 +1,24 @@
 import * as THREE from 'three'
 import type { PigLook } from '../core/pigs.ts'
 import type { PigState } from '../core/protocol.ts'
+import { coatFor, type CoatPart } from './fur.ts'
+import { drapedHair, rosetteSpots, rosettes, scruffyHair, type Ellipsoid } from './hair.ts'
 import { mat } from './veg.ts'
 
 const sphere = new THREE.SphereGeometry(1, 14, 10)
-const fluffy = new THREE.IcosahedronGeometry(1, 1)
-const cone = new THREE.ConeGeometry(1, 1, 6)
+/** Smoother, for the furry body and head (their coat is painted on). */
+const round = new THREE.SphereGeometry(1, 28, 18)
 const blob = new THREE.CircleGeometry(1, 16)
 const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false })
+/** The body (in the body group) and head (in the head group) spheres. */
+const BODY: Ellipsoid = { c: [0, 0.2, 0.02], r: [0.22, 0.18, 0.33] }
+const HEAD: Ellipsoid = { c: [0, 0, -0.04], r: [0.15, 0.135, 0.16] }
+/** Bits of the face (in the head group) that hair keeps off: eyes, then nose and mouth. */
+const FACE = [
+  { at: new THREE.Vector3(-0.095, 0.035, -0.12), r: 0.045 },
+  { at: new THREE.Vector3(0.095, 0.035, -0.12), r: 0.045 },
+  { at: new THREE.Vector3(0, -0.03, -0.18), r: 0.07 },
+]
 const PINK = 0xf3b3b0
 const DARK_EYE = 0x161012
 
@@ -20,10 +31,21 @@ function prng(seed: number) {
   }
 }
 
-function part(geo: THREE.BufferGeometry, color: string | number, s: [number, number, number], p: [number, number, number]) {
-  const m = new THREE.Mesh(geo, mat(color))
+function part(geo: THREE.BufferGeometry, color: string | number | THREE.Material, s: [number, number, number], p: [number, number, number]) {
+  const m = new THREE.Mesh(geo, color instanceof THREE.Material ? color : mat(color))
   m.scale.set(...s)
   m.position.set(...p)
+  return m
+}
+
+/** A sphere in the pig's painted coat, wrapped in fuzzy fur shells. */
+function furry(coat: CoatPart, s: [number, number, number], p: [number, number, number]) {
+  const m = part(round, coat.skin, s, p)
+  for (const shell of coat.shells) {
+    const fur = new THREE.Mesh(round, shell.mat)
+    fur.scale.setScalar(shell.scale)
+    m.add(fur)
+  }
   return m
 }
 
@@ -44,10 +66,9 @@ export class PigModel {
   private readonly belly: THREE.Mesh
 
   constructor(look: PigLook) {
-    const [base, patch, patch2] = look.coat
+    const patch = look.coat[1]
     const rand = prng(look.id + 1)
-    const fluff = look.breed === 'teddy' || look.breed === 'abyssinian'
-    const bodyGeo = fluff ? fluffy : sphere
+    const coat = coatFor(look)
 
     this.shadow = new THREE.Mesh(blob, blobMat)
     this.shadow.rotation.x = -Math.PI / 2
@@ -56,47 +77,24 @@ export class PigModel {
     this.root.add(this.shadow, this.body)
 
     const b = this.body
-    b.add(part(bodyGeo, base, [0.22, 0.18, 0.33], [0, 0.2, 0.02]))
+    b.add(furry(coat.body, BODY.r, BODY.c))
     this.head.position.set(0, 0.23, -0.27)
     b.add(this.head)
     const h = this.head
-    h.add(part(bodyGeo, base, [0.15, 0.135, 0.16], [0, 0, -0.04]))
-
-    // Coat markings
-    if (look.pattern === 'dutch') {
-      b.add(part(bodyGeo, patch, [0.225, 0.185, 0.2], [0, 0.2, 0.15]))
-      for (const side of [-1, 1]) h.add(part(sphere, patch, [0.08, 0.11, 0.11], [side * 0.08, 0.02, -0.03]))
-    } else if (look.pattern === 'patches') {
-      for (let i = 0; i < 3; i++) {
-        const a = rand() * Math.PI * 2
-        const z = -0.15 + rand() * 0.35
-        const color = i % 2 ? patch2 : patch
-        const p = part(sphere, color, [0.12, 0.11, 0.13], [Math.cos(a) * 0.12, 0.24 + Math.sin(a) * 0.06, z])
-        b.add(p)
-      }
-      if (rand() < 0.6) h.add(part(sphere, patch, [0.09, 0.1, 0.1], [(rand() < 0.5 ? -1 : 1) * 0.07, 0.03, -0.04]))
-    }
+    // The markings are painted into the coat (fur.ts).
+    h.add(furry(coat.head, HEAD.r, HEAD.c))
 
     // Breeds
     if (look.breed === 'abyssinian') {
-      // Rosettes: little tufts sticking out all over.
-      for (let i = 0; i < 9; i++) {
-        const a = rand() * Math.PI * 2
-        const z = -0.2 + rand() * 0.42
-        const tuft = part(cone, i % 3 === 0 && look.pattern !== 'self' ? patch : base, [0.05, 0.1, 0.05], [Math.cos(a) * 0.19, 0.2 + Math.abs(Math.sin(a)) * 0.15, z])
-        tuft.lookAt(new THREE.Vector3(Math.cos(a) * 2, 0.2 + Math.abs(Math.sin(a)) * 2, z))
-        tuft.rotateX(Math.PI / 2)
-        b.add(tuft)
-      }
+      // Rosettes (whorls of curly hair) over a scruffy coat of short straight hair going every which way.
+      const spots = rosetteSpots(rand)
+      b.add(rosettes(coat.body, BODY, rand, spots))
+      b.add(scruffyHair(coat.body, BODY, rand, { count: 6500, len: 0.08, radius: 0.0026, avoid: spots }))
+      h.add(scruffyHair(coat.head, HEAD, rand, { count: 1000, len: 0.045, radius: 0.0021, bare: FACE, flat: true }))
     } else if (look.breed === 'peruvian') {
-      // Long flowing hair: a skirt down to the ground and a fringe over the face.
-      for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * Math.PI * 2
-        const lock = part(sphere, i % 3 === 1 ? patch : base, [0.07, 0.15, 0.07], [Math.cos(a) * 0.21, 0.12, 0.04 + Math.sin(a) * 0.3])
-        lock.rotation.z = Math.cos(a) * 0.3
-        b.add(lock)
-      }
-      h.add(part(sphere, base, [0.13, 0.07, 0.12], [0, 0.1, -0.06]))
+      // Long flowing hair draped down to the ground, and parted on the head.
+      b.add(drapedHair(coat.body, BODY, 0.02, rand, { count: 320, zFrom: -0.8, zTo: 1.2, radius: 0.008, rear: 120 }))
+      h.add(drapedHair(coat.head, HEAD, -0.09, rand, { count: 80, zFrom: -0.25, zTo: 0.9, radius: 0.007 }))
     } else if (look.breed === 'teddy') {
       b.scale.set(1.08, 1.05, 1)
     }
@@ -130,7 +128,7 @@ export class PigModel {
     b.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = false
     })
-    this.belly = part(bodyGeo, base, [0.25, 0.16, 0.27], [0, 0.15, 0.04])
+    this.belly = furry(coat.body, [0.25, 0.16, 0.27], [0, 0.15, 0.04])
     this.belly.visible = false
     b.add(this.belly)
     this.setRosettes(look.rosettes ?? 0)

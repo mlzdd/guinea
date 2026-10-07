@@ -837,9 +837,9 @@ export class Farm {
     return inRect(f, { x0: b.x - BED_W / 2, x1: b.x + BED_W / 2, z0: b.z - BED_D / 2, z1: b.z + BED_D / 2 }, pad)
   }
 
-  private throwVeg(f: Farmer, veg: Veg, at: P) {
-    const i = VEGGIES.indexOf(veg)
-    if (f.holding !== null || f.sack || f.basket[i] <= 0) return
+  private throwVeg(f: Farmer, veg: Veg | 'hay', at: P) {
+    const i = veg === 'hay' ? -1 : VEGGIES.indexOf(veg)
+    if (f.holding !== null || f.sack || (veg === 'hay' ? f.hay : f.basket[i]) <= 0) return
     let dx = at.x - f.x
     let dz = at.z - f.z
     const d = Math.hypot(dx, dz)
@@ -849,17 +849,18 @@ export class Farm {
     }
     const to = { x: f.x + dx, z: f.z + dz }
     settlePig(to, 0.25) // never lands somewhere a pig can't reach
-    f.basket[i]--
+    if (veg === 'hay') f.hay--
+    else f.basket[i]--
     const ms = Math.round(FLIGHT_BASE_MS + Math.min(d, THROW_RANGE) * FLIGHT_PER_M_MS)
     this.addFood(veg, to, this.t + ms, null).by = f.name
-    this.credit(f.name, 'fed')
+    this.credit(f.name, veg === 'hay' ? 'hay' : 'fed')
     this.out.push({ to: 'all', msg: { t: 'thrown', by: f.id, kind: veg, from: { x: r2(f.x), z: r2(f.z) }, to: { x: r2(to.x), z: r2(to.z) }, ms } })
   }
 
-  private addFood(kind: Veg, at: P, landAt: number, tree: number | null): Food {
+  private addFood(kind: Veg | 'hay', at: P, landAt: number, tree: number | null): Food {
     const ground = [...this.foods.values()].filter((x) => !x.bowl)
     if (ground.length >= MAX_GROUND_FOOD) this.foods.delete(ground[0].id)
-    const food: Food = { id: this.nextId++, kind, x: at.x, z: at.z, bites: VEG_BITES[kind], landAt, landed: false, bowl: false, tree, by: null }
+    const food: Food = { id: this.nextId++, kind, x: at.x, z: at.z, bites: kind === 'hay' ? HAY_ARMFUL : VEG_BITES[kind], landAt, landed: false, bowl: false, tree, by: null }
     this.foods.set(food.id, food)
     return food
   }
@@ -1253,7 +1254,7 @@ export class Farm {
 
   private foodSpot(p: Pig, food: Food): P {
     // Along the front of a hay rack.
-    if (food.kind === 'hay') return { x: food.x + (((p.id * 0.618) % 1) - 0.5) * 2.4, z: food.z + 0.35 }
+    if (food.kind === 'hay' && food.bowl) return { x: food.x + (((p.id * 0.618) % 1) - 0.5) * 2.4, z: food.z + 0.35 }
     const a = p.id * 2.39996
     const ring = food.bowl ? BOWL_RING : FOOD_RING
     return { x: food.x + Math.cos(a) * ring, z: food.z + Math.sin(a) * ring }
@@ -1997,7 +1998,7 @@ export class Farm {
       issues: p.issues,
       ...(p.due !== undefined ? { care: Math.round((100 * p.careGood) / Math.max(1, p.careTotal)) } : {}),
     }))
-    const ground = [...this.foods.values()].filter((f): f is Food & { kind: Veg } => !f.bowl && f.landed && f.kind !== 'pellets')
+    const ground = [...this.foods.values()].filter((f): f is Food & { kind: Veg | 'hay' } => !f.bowl && f.landed && f.kind !== 'pellets' && f.kind !== 'salad')
     const preds: PredSnap[] = this.preds.map((p) => ({ id: p.id, kind: p.kind, x: r2(p.x), y: r2(p.y), z: r2(p.z), s: p.state, pig: p.pig }))
     return {
       t: 'snap',

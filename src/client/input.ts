@@ -1,17 +1,18 @@
 /**
  * Keyboard and mouse. No pointer lock: the mouse aims at the ground and clicks buttons in the
- * health-check card like any web page. Right-drag turns the camera, the wheel zooms.
+ * health-check card like any web page. Left click does what E does, right click throws, the wheel
+ * zooms. The camera never turns.
  */
 export class Input {
   private readonly keys = new Set<string>()
   /** Mouse position in normalised device coords (−1..1), for picking the ground. */
   readonly mouse = { x: 0, y: 0, over: false }
-  /** Accumulated camera turn (radians) and zoom steps since last read. */
-  private turn = 0
+  /** Accumulated zoom steps since last read. */
   private zoom = 0
-  private dragging = false
-  private lastX = 0
+  /** Left click: the same as E. */
   onClick: () => void = () => {}
+  /** Right click: throw. */
+  onThrow: () => void = () => {}
   onKey: (code: string) => void = () => {}
 
   constructor(canvas: HTMLCanvasElement) {
@@ -29,26 +30,15 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault())
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button === 0) this.onClick()
-      if (e.button === 2) {
-        this.dragging = true
-        this.lastX = e.clientX
-        canvas.setPointerCapture(e.pointerId)
-      }
+      if (e.button === 2) this.onThrow()
     })
     canvas.addEventListener('pointermove', (e) => {
       const r = canvas.getBoundingClientRect()
       this.mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1
       this.mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1
       this.mouse.over = true
-      if (this.dragging) {
-        this.turn -= (e.clientX - this.lastX) * 0.006
-        this.lastX = e.clientX
-      }
     })
     canvas.addEventListener('pointerleave', () => (this.mouse.over = false))
-    canvas.addEventListener('pointerup', (e) => {
-      if (e.button === 2) this.dragging = false
-    })
     canvas.addEventListener(
       'wheel',
       (e) => {
@@ -68,12 +58,6 @@ export class Input {
     const x = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0)
     const y = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0)
     return { x, y }
-  }
-
-  takeTurn() {
-    const t = this.turn + (this.down('KeyQ') ? 0.03 : 0) - (this.down('KeyR') ? 0.03 : 0)
-    this.turn = 0
-    return t
   }
 
   takeZoom() {

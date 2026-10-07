@@ -63,7 +63,7 @@ export interface PigSnap {
 
 export interface FoodSnap {
   id: number
-  kind: Veg
+  kind: Veg | 'hay'
   x: number
   z: number
   bites: number
@@ -100,7 +100,8 @@ export type DiaryRow = { name: string } & Record<Stat, number>
 export type ClientMsg =
   | { t: 'join'; name: string; color: number }
   | { t: 'state'; x: number; y: number; z: number; yaw: number }
-  | { t: 'throw'; veg: Veg; x: number; z: number }
+  /** Throw a veg (or an armful of hay) at a spot; thrown at your own feet, it's dropped. */
+  | { t: 'throw'; veg: Veg | 'hay'; x: number; z: number }
   | { t: 'plant'; bed: number }
   | { t: 'harvest'; bed: number }
   | { t: 'fill'; bowl: number; veg: Veg }
@@ -179,8 +180,8 @@ export type ServerMsg =
     }
   /** End of a day: how it went and what it earned. */
   | { t: 'report'; day: number; lines: { label: string; coins: number }[]; total: number; stars: number; coins: number }
-  /** A veg was thrown: animate it from `from` to `to` over `ms`. */
-  | { t: 'thrown'; by: number; kind: Veg; from: { x: number; z: number }; to: { x: number; z: number }; ms: number }
+  /** A veg (or hay) was thrown: animate it from `from` to `to` over `ms`. */
+  | { t: 'thrown'; by: number; kind: Veg | 'hay'; from: { x: number; z: number }; to: { x: number; z: number }; ms: number }
   | { t: 'shoo'; by: number; x: number; z: number }
   | { t: 'purr'; pig: number }
   | { t: 'alert'; kind: AlertKind; text: string }
@@ -223,7 +224,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       // Older clients don't send y; nobody gets higher than a jump off a hay stack.
       return { t: 'state', x: o.x, y: isNum(o.y, MAX_Y) ? Math.max(0, o.y) : 0, z: o.z, yaw: o.yaw }
     case 'throw':
-      if (!isVeg(o.veg) || !isNum(o.x) || !isNum(o.z)) return null
+      if ((!isVeg(o.veg) && o.veg !== 'hay') || !isNum(o.x) || !isNum(o.z)) return null
       return { t: 'throw', veg: o.veg, x: o.x, z: o.z }
     case 'plant':
     case 'harvest':
