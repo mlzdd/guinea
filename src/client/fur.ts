@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { PigLook } from '../core/pigs.ts'
+import { COLORS, type PigLook } from '../core/pigs.ts'
 
 /**
  * A pig's coat painted onto its body and head spheres: the markings (soft-edged patches, a dutch
@@ -11,7 +11,9 @@ import type { PigLook } from '../core/pigs.ts'
  */
 
 /** Fur shells per part, as [scale, alphaTest]: the outer shell has fewer, sparser tips. */
-const SHELLS: Record<'short' | 'long', [number, number][]> = {
+const SHELLS: Record<'fuzz' | 'short' | 'long', [number, number][]> = {
+  /** A skinny pig's peach fuzz. */
+  fuzz: [[1.012, 0.8]],
   short: [
     [1.035, 0.35],
     [1.07, 0.65],
@@ -40,14 +42,14 @@ export interface Coat {
 const cache = new Map<string, Coat>()
 
 export function coatFor(look: PigLook): Coat {
-  const long = look.breed !== 'smooth'
-  const key = `${look.id}|${look.pattern}|${look.coat.join()}|${long}`
+  const fur = look.breed === 'skinny' ? 'fuzz' : look.breed === 'smooth' || look.breed === 'crested' ? 'short' : 'long'
+  const key = `${look.id}|${look.pattern}|${look.coat.join()}|${look.breed}`
   let coat = cache.get(key)
   if (!coat) {
     const rand = prng(look.id * 7 + 3)
     coat = {
-      body: makePart(paintBody(look, rand), 256, 128, long, false),
-      head: makePart(paintHead(look, rand), 128, 64, long, true),
+      body: makePart(finish(look, paintBody(look, rand), false), 256, 128, fur, false),
+      head: makePart(finish(look, paintHead(look, rand), true), 128, 64, fur, true),
     }
     cache.set(key, coat)
   }
@@ -57,7 +59,7 @@ export function coatFor(look: PigLook): Coat {
 /** What colour a point on the unit sphere is (sRGB 0..1). */
 export type Paint = (x: number, y: number, z: number) => [number, number, number]
 
-function makePart(paint: Paint, w: number, h: number, long: boolean, face: boolean): CoatPart {
+function makePart(paint: Paint, w: number, h: number, fur: keyof typeof SHELLS, face: boolean): CoatPart {
   const color = document.createElement('canvas')
   const tips = document.createElement('canvas')
   color.width = tips.width = w
@@ -95,12 +97,40 @@ function makePart(paint: Paint, w: number, h: number, long: boolean, face: boole
   map.colorSpace = THREE.SRGBColorSpace
   const tipMap = new THREE.CanvasTexture(tips)
   const skin = new THREE.MeshLambertMaterial({ map, bumpMap: tipMap, bumpScale: 0.6 })
-  const shells = SHELLS[long ? 'long' : 'short'].map(([scale, alphaTest], i, all) => ({
+  const shells = SHELLS[fur].map(([scale, alphaTest], i, all) => ({
     scale,
     // Inner fur a touch darker than the tips, for a bit of depth.
     mat: new THREE.MeshLambertMaterial({ map, alphaMap: tipMap, alphaTest, color: new THREE.Color().setScalar(0.88 + (0.12 * (i + 1)) / all.length) }),
   }))
   return { skin, shells, paint }
+}
+
+const AGOUTI = rgb(COLORS.agouti)
+const WHITE: [number, number, number] = [1, 1, 1]
+const BLACK: [number, number, number] = [0.1, 0.08, 0.07]
+const SKIN: [number, number, number] = [0.93, 0.7, 0.66]
+
+/**
+ * Hair-by-hair effects over the markings: agouti ticking (each hair banded dark and gold), roan
+ * (white hairs mixed in, not on the head), brindle (dark hairs streaked through), and a skinny pig's
+ * bare pink skin with wrinkles.
+ */
+function finish(look: PigLook, paint: Paint, head: boolean): Paint {
+  return (x, y, z) => {
+    let c = paint(x, y, z)
+    const fine = noise(x * 90, y * 90, z * 90)
+    const agouti = 1 - smooth(0.03, 0.12, Math.hypot(c[0] - AGOUTI[0], c[1] - AGOUTI[1], c[2] - AGOUTI[2]))
+    if (agouti > 0) c = mix(c, mix(mix(c, BLACK, 0.45), [0.86, 0.68, 0.4], smooth(0.42, 0.58, fine)), agouti * 0.85)
+    if (look.pattern === 'roan' && !head) c = mix(c, WHITE, smooth(0.5, 0.6, noise(x * 110 + 7, y * 110, z * 110)) * 0.8)
+    if (look.pattern === 'brindle') c = mix(c, BLACK, smooth(0.52, 0.62, noise(x * 40 + 3, y * 40, z * 6)) * 0.85)
+    if (look.breed === 'skinny') {
+      c = mix(c, SKIN, 0.55)
+      // Folds of skin across the shoulders and over the brow.
+      const fold = Math.sin(z * (head ? 18 : 26) + noise(x * 3, y * 3, z * 3) * 4)
+      c = mix(c, mix(c, BLACK, 0.3), smooth(0.7, 1, fold) * 0.45)
+    }
+    return c
+  }
 }
 
 function paintBody(look: PigLook, rand: () => number): Paint {

@@ -1,11 +1,13 @@
 /** What each guinea pig looks like and who they are. Made once per farm; only the name, family, friends and prizes change. */
 
-export type Breed = 'smooth' | 'abyssinian' | 'peruvian' | 'teddy'
+export type Breed = 'smooth' | 'abyssinian' | 'peruvian' | 'teddy' | 'crested' | 'skinny'
+export const BREEDS: readonly Breed[] = ['smooth', 'abyssinian', 'peruvian', 'teddy', 'crested', 'skinny']
 /**
  * How `coat` is used: self = one colour; dutch = white with coloured cheeks and rear; patches = base
- * with two patch colours; himalayan = white with dark nose, ears and feet.
+ * with two patch colours; himalayan = white with dark nose, ears and feet; roan = base with white hairs
+ * mixed through; brindle = base with dark hairs streaked through. Agouti anywhere is drawn ticked.
  */
-export type Pattern = 'self' | 'dutch' | 'patches' | 'himalayan'
+export type Pattern = 'self' | 'dutch' | 'patches' | 'himalayan' | 'roan' | 'brindle'
 
 export interface PigLook {
   id: number
@@ -37,6 +39,8 @@ export const BREED_NAMES: Record<Breed, string> = {
   abyssinian: 'Abyssinian',
   peruvian: 'Peruvian',
   teddy: 'Teddy',
+  crested: 'Crested',
+  skinny: 'Skinny pig',
 }
 
 export const COLORS = {
@@ -73,7 +77,7 @@ export function makePigLooks(count: number, rand: () => number): PigLook[] {
   const solid = [C.white, C.cream, C.ginger, C.brown, C.chocolate, C.black, C.agouti, C.lilac]
   const looks: PigLook[] = []
   for (let id = 0; id < count; id++) {
-    const pattern = pick(rand, ['self', 'dutch', 'patches', 'patches', 'himalayan'] as const)
+    const pattern = pick(rand, ['self', 'dutch', 'patches', 'patches', 'himalayan', 'roan', 'brindle'] as const)
     let coat: [string, string, string]
     if (pattern === 'self') {
       const c = pick(rand, solid)
@@ -83,6 +87,12 @@ export function makePigLooks(count: number, rand: () => number): PigLook[] {
       coat = [C.white, c, c]
     } else if (pattern === 'himalayan') {
       coat = [C.white, pick(rand, [C.chocolate, C.black]), C.white]
+    } else if (pattern === 'roan') {
+      const c = pick(rand, [C.black, C.chocolate, C.ginger, C.agouti, C.lilac])
+      coat = [c, C.white, C.white]
+    } else if (pattern === 'brindle') {
+      const c = pick(rand, [C.ginger, C.cream, C.brown])
+      coat = [c, C.black, C.black]
     } else {
       const base = pick(rand, [C.white, C.cream, C.ginger, C.white])
       const others = solid.filter((c) => c !== base)
@@ -92,7 +102,7 @@ export function makePigLooks(count: number, rand: () => number): PigLook[] {
     looks.push({
       id,
       name: names[id % names.length] + (id >= names.length ? ` ${Math.floor(id / names.length) + 1}` : ''),
-      breed: pick(rand, ['smooth', 'smooth', 'abyssinian', 'peruvian', 'teddy'] as const),
+      breed: pick(rand, ['smooth', 'smooth', 'abyssinian', 'peruvian', 'teddy', 'crested', 'skinny'] as const),
       pattern,
       coat,
       sex: rand() < 0.5 ? 'sow' : 'boar',
@@ -118,7 +128,7 @@ export function babyLook(id: number, mum: PigLook, taken: string[], born: number
   return {
     id,
     name: name.slice(0, NAME_LIMIT),
-    breed: rand() < 0.75 ? mum.breed : pick(rand, ['smooth', 'abyssinian', 'peruvian', 'teddy'] as const),
+    breed: rand() < 0.75 ? mum.breed : pick(rand, BREEDS),
     pattern: mum.pattern,
     coat,
     sex: rand() < 0.5 ? 'sow' : 'boar',

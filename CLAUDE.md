@@ -52,7 +52,7 @@ Find the LAN address with `hostname -I` (ignore `169.254.*`). If another compute
 src/core/            Shared by browser and server (no DOM). Imports use .ts extensions so Node can load them.
   rules.ts           ALL gameplay numbers (pellets, pay, upgrade prices and effects, speeds, hunger, bites, basket size, grow time, issue rates, predator timings, day length)
   map.ts             The layout: the 3×3 grid of land (SQUARES, canBuy), the barn + door, salad station, gardens + beds, orchard trees, hidey huts, hay, pond, bowls, pig houses. The current land (setLand) and everything that follows from it: fence, solids per kind (farmer blocks with heights, pig, fox), onFarm. pushOut collision, groundAt, nextStep door routing
-  pigs.ts            PigLook (name, breed: smooth/abyssinian/peruvian/teddy, coat pattern + colours, sex, age, weight) and makePigLooks
+  pigs.ts            PigLook (name, breed: smooth/abyssinian/peruvian/teddy/crested/skinny, coat pattern (self/dutch/patches/himalayan/roan/brindle) + colours, sex, age, weight) and makePigLooks
   farm.ts            Farm: the whole simulation, no networking. Feed it messages + tick(dt); read `out`. save()/load
   protocol.ts        ClientMsg / ServerMsg types, parseClientMsg (validates everything from the wire), cleanName
   move.ts            moveFarmer: a farmer's momentum, jumping and landing (run by the browser, tested here)
@@ -62,7 +62,8 @@ src/client/
   world.ts           The scene from map.ts: each land square's things (shown once bought; long grass and a for-sale sign before), the fence round the owned land, barn with removable roof and its gate, hay racks, feed bin, salad station, garden beds with growing crops, orchard, hay field and stack yard, pond with ducks, flowers. Bowls', hoppers', racks' and platters' levels, upgrades, rain and puddles, day/night lighting (`darkness`) and lamps
   fur.ts             coatFor(look): each pig's coat painted per texel onto its body and head spheres (soft-edged markings, fur grain, a bump map) and the materials for its fuzzy fur shells (longer for non-smooth breeds)
   hair.ts            Long hair as thin tapered strands merged into one mesh: a peruvian's drapes to the ground (parted on the head), an abyssinian's swirly rosettes; coloured from the coat
-  pig.ts             PigModel: built from the look; pose() animates walking, eating, grazing, sleeping, popcorning, zooming, moping (and a droopy walk when poorly), begging, being held/carried. Rosettes, a pregnant tummy
+  shape.ts           The guinea pig shape: loaf body and blunt head as warped spheres (shapedSphere keeps the UVs for the painted coat; surface() is where fur and hair go)
+  pig.ts             PigModel: built from the look: loaf body, blended head, whisker pads + whiskers, petal ears, glossy eyes (ruby for himalayans/white selfs), breed hair (hair.ts), a crest, a skinny pig's fuzzy nose. pose() animates walking (a low scurry), eating, grazing, sleeping (loaf or flopped out), popcorning, zooming, moping, freezing when hiding, loafing when idle, the rumblestrut (game.ts: a boar near a sow), a wiggling nose and flicking ears, and being held/carried. Rosettes, a pregnant tummy
   critters.ts        FarmerModel (straw hat, overalls in their colour, wellies, basket with veg or hay, a pellet sack, jump pose), FoxModel, HawkModel (+ ground shadow), textSprite
   veg.ts             makeVeg (carrot, lettuce, cucumber, pepper, apple), icons, shared materials
   bubbles.ts         Comic speech bubbles as sprites (cached canvas textures, one per thing at a time)

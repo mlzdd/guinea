@@ -54,6 +54,9 @@ const CAM_PITCH = 0.95
 const THROW_COOLDOWN = 0.2
 /** Pigs further than this from you keep quiet, so the screen isn't all bubbles. */
 const CHATTER_RANGE = 30
+/** A grown-up boar this close to a grown-up sow (both up and about) rumblestruts at her. */
+const STRUT_RANGE = 1.4
+const STRUT_AT: PigState[] = ['idle', 'wander', 'graze']
 /** Emote keys, in EMOTES order, and how each bubble looks. */
 const EMOTE_KEYS = ['KeyZ', 'KeyX', 'KeyC', 'KeyV']
 const EMOTE_STYLE: BubbleStyle[] = ['plain', 'love', 'eek', 'wheek']
@@ -84,6 +87,8 @@ interface PigView {
   speed: number
   nextChatter: number
   phase: number
+  /** A boar rumblestrutting at a sow nearby. */
+  strut: boolean
 }
 
 interface FarmerView {
@@ -232,6 +237,7 @@ export class Game {
       speed: 0,
       nextChatter: Math.random() * 5,
       phase: old?.phase ?? Math.random() * 10,
+      strut: false,
     }
   }
 
@@ -706,6 +712,8 @@ export class Game {
 
     // Pups grow from half size to full over PUP_DAYS.
     const days = this.snap!.day - 1 + this.snap!.time
+    // Grown-up sows that are up and about, for boars to show off to.
+    const sows = this.pigs.filter((v) => v.look.sex === 'sow' && v.look.age > 0 && STRUT_AT.includes(v.snap.s))
     for (const v of this.pigs) {
       const s = v.snap
       const m = v.model
@@ -742,7 +750,8 @@ export class Game {
       }
       v.speed = v.speed * 0.7 + (Math.hypot(v.x - ox, v.z - oz) / dt) * 0.3
       m.root.rotation.y = v.yaw
-      m.pose(s.s, holder || carrier ? 0 : v.speed, this.clock, v.phase, poorly(s))
+      v.strut = v.look.sex === 'boar' && v.look.age > 0 && STRUT_AT.includes(s.s) && sows.some((w) => Math.hypot(w.x - v.x, w.z - v.z) < STRUT_RANGE)
+      m.pose(s.s, holder || carrier ? 0 : v.speed, this.clock, v.phase, poorly(s), v.strut)
       this.chatter(v)
     }
   }
@@ -792,6 +801,7 @@ export class Game {
       return
     }
     if (this.clock < v.nextChatter) return
+    if (v.strut && Math.random() < 0.5) return say(pickOne(['rrrrrr', 'rumble rumble', 'rrrumble~']), 'love', 4)
     switch (s) {
       case 'eat':
         return say(pickOne(MONCH), 'monch', 1.3)

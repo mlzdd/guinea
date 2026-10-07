@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { CoatPart } from './fur.ts'
+import { surface, type Ellipsoid } from './shape.ts'
+
+/** Hair only needs the coat's colours. */
+type Coat = Pick<CoatPart, 'paint'>
 
 /**
  * Long hair as very thin tapered strands, merged into one mesh per part: a peruvian's hair draped
@@ -8,21 +12,11 @@ import type { CoatPart } from './fur.ts'
  * Each strand takes the coat's colour where it grows, a little lighter at the tip.
  */
 
-/** A body or head sphere: its centre and radii in the parent group. */
-export interface Ellipsoid {
-  c: [number, number, number]
-  r: [number, number, number]
-}
-
 const hairMat = new THREE.MeshLambertMaterial({ vertexColors: true })
 const SEGS = 10
 const SIDES = 3
 
 const v = new THREE.Vector3()
-
-function surface(e: Ellipsoid, d: THREE.Vector3, out = 1) {
-  return new THREE.Vector3(e.c[0] + d.x * e.r[0] * out, e.c[1] + d.y * e.r[1] * out, e.c[2] + d.z * e.r[2] * out)
-}
 
 /** One strand along the points, tapering to a fine tip. */
 function strand(points: THREE.Vector3[], radius: number, root: THREE.Color, tip: THREE.Color, segs = SEGS) {
@@ -46,7 +40,7 @@ function strand(points: THREE.Vector3[], radius: number, root: THREE.Color, tip:
   return g
 }
 
-function colors(coat: CoatPart, d: THREE.Vector3, rand: () => number, spread = 0.16, tipLight = 0.12): [THREE.Color, THREE.Color] {
+function colors(coat: Coat, d: THREE.Vector3, rand: () => number, spread = 0.16, tipLight = 0.12): [THREE.Color, THREE.Color] {
   const [r, g, b] = coat.paint(d.x, d.y, d.z)
   const k = 1 - spread * 0.75 + rand() * spread
   const root = new THREE.Color().setRGB(r * k, g * k, b * k, THREE.SRGBColorSpace)
@@ -66,7 +60,7 @@ function mesh(strands: THREE.BufferGeometry[]) {
  * strands fan out from the back end of the parting, all the way round over the bum.
  */
 export function drapedHair(
-  coat: CoatPart,
+  coat: Coat,
   e: Ellipsoid,
   endY: number,
   rand: () => number,
@@ -117,19 +111,32 @@ export function drapedHair(
  * close along the contours instead (for the face).
  */
 export function scruffyHair(
-  coat: CoatPart,
+  coat: Coat,
   e: Ellipsoid,
   rand: () => number,
-  opts: { count: number; len: number; radius: number; avoid?: THREE.Vector3[]; bare?: { at: THREE.Vector3; r: number }[]; flat?: boolean },
+  opts: {
+    count: number
+    len: number
+    radius: number
+    avoid?: THREE.Vector3[]
+    bare?: { at: THREE.Vector3; r: number }[]
+    flat?: boolean
+    /** Only where this says (by direction on the unit sphere). */
+    where?: (d: THREE.Vector3) => boolean
+    /** How far down the sides it grows (−1 = all the way under). */
+    from?: number
+  },
 ) {
   const avoid = (opts.avoid ?? []).map((c) => surface(e, c))
   const strands: THREE.BufferGeometry[] = []
   const back = new THREE.Vector3(0, -0.25, 1)
   for (let i = 0; i < opts.count; i++) {
-    const y = -0.35 + rand() * 1.35
+    const from = opts.from ?? -0.35
+    const y = from + rand() * (1 - from)
     const around = rand() * Math.PI * 2
     const ring = Math.sqrt(1 - y * y)
     const d = new THREE.Vector3(ring * Math.cos(around), y, ring * Math.sin(around))
+    if (opts.where && !opts.where(d)) continue
     const normal = new THREE.Vector3(d.x / e.r[0], d.y / e.r[1], d.z / e.r[2]).normalize()
     const dir = back.clone().addScaledVector(normal, -back.dot(normal))
     if (dir.lengthSq() < 1e-4) dir.set(0, -1, 0)
@@ -174,8 +181,8 @@ export function rosetteSpots(rand: () => number) {
   return spots
 }
 
-/** Abyssinian rosettes: whorls of short, curly strands that sweep out from a point and droop. */
-export function rosettes(coat: CoatPart, e: Ellipsoid, rand: () => number, spots: THREE.Vector3[]) {
+/** Abyssinian rosettes: whorls of short, curly strands that sweep out from a point and droop. `size` scales them (a crest). */
+export function rosettes(coat: Coat, e: Ellipsoid, rand: () => number, spots: THREE.Vector3[], size = 1) {
   const strands: THREE.BufferGeometry[] = []
   const up = new THREE.Vector3(0, 1, 0)
   for (const centre of spots) {
@@ -190,7 +197,7 @@ export function rosettes(coat: CoatPart, e: Ellipsoid, rand: () => number, spots
     for (let k = 0; k < n; k++) {
       // Evenly round, all curling the same way, alternately short and long so the spiral shows.
       const angle = (k / n) * Math.PI * 2
-      const len = (k % 2 ? 0.055 : 0.09) * (0.95 + rand() * 0.1)
+      const len = (k % 2 ? 0.055 : 0.09) * size * (0.95 + rand() * 0.1)
       const points: THREE.Vector3[] = [base.clone().addScaledVector(normal, -0.01)]
       for (let s = 1; s <= 4; s++) {
         const t = s / 4
@@ -201,12 +208,19 @@ export function rosettes(coat: CoatPart, e: Ellipsoid, rand: () => number, spots
           base
             .clone()
             .addScaledVector(dir, len * t)
-            .addScaledVector(normal, 0.03 * Math.sin(t * Math.PI * 0.8) + 0.008)
-            .add(new THREE.Vector3(0, -0.035 * t * t, 0)),
+            .addScaledVector(normal, (0.03 * Math.sin(t * Math.PI * 0.8) + 0.008) * size)
+            .add(new THREE.Vector3(0, -0.035 * t * t * size, 0)),
         )
       }
       strands.push(strand(points, 0.0022 * (0.9 + rand() * 0.2), ...colors(coat, centre, rand, 0.06, 0.28), 6))
     }
   }
   return mesh(strands)
+}
+
+/** Whiskers: very fine, stiff strands, each from a root through a bend to its tip. */
+export function whiskers(paths: THREE.Vector3[][], color: number) {
+  const c = new THREE.Color(color)
+  const tip = c.clone().lerp(new THREE.Color(1, 1, 1), 0.3)
+  return mesh(paths.map((p) => strand(p, 0.0016, c, tip, 6)))
 }
