@@ -303,16 +303,22 @@ export class PigModel {
     FEET.forEach(([x, z], i) => feet[i].position.set(x, 0.022, z))
 
     if (moving > 0.2) {
-      // A low scurry: little feet pattering, hardly any bob.
+      // Little hops: up off the ground (nose up), a moment in the air, then down (nose down, a squash) and
+      // a patter of feet before the next one. Faster and higher at a run; a poorly pig plods.
       const fast = moving > 2
-      const step = tt * (fast ? 28 : 16)
-      y = Math.abs(Math.sin(step)) * (fast ? 0.022 : 0.009) * (droopy ? 0.4 : 1)
-      tilt = fast ? 0.05 : 0.015
-      feet.forEach((f, i) => (f.position.y = 0.022 + Math.max(0, Math.sin(step + (i % 2 ? Math.PI : 0))) * 0.025))
+      const step = tt * (fast ? 20 : 12) * (droopy ? 0.7 : 1)
+      const lift = Math.sin(step)
+      const air = Math.max(0, lift)
+      y = air * (fast ? 0.05 : 0.035) * (droopy ? 0.4 : 1)
+      tilt = (fast ? 0.04 : 0.01) - Math.cos(step) * air * 0.12
+      squash = 1 + 0.05 * air - 0.07 * Math.max(0, -lift)
+      feet.forEach((f, i) => (f.position.y = air > 0 ? 0.03 : 0.022 + Math.max(0, Math.sin(step * 2 + (i % 2 ? Math.PI : 0))) * 0.018))
       sniff = fast ? 0 : 26
     }
 
-    switch (state) {
+    // Raiding the veg patch: just a pig on the move while it squeezes in or out; once there, munching like any meal.
+    const as = state === 'raid' && moving <= 0.2 ? 'eat' : state
+    switch (as) {
       case 'eat':
         // Head down, munching away.
         headTilt = 0.35 + Math.abs(Math.sin(tt * 14)) * 0.12

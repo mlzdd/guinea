@@ -74,6 +74,7 @@ const DIARY_COLS: { icon: string; title: string; stat: Stat }[] = [
 export function mood(p: PigSnap): string {
   if (p.s === 'sleep') return 'fast asleep'
   if (p.s === 'eat') return 'munching'
+  if (p.s === 'raid') return 'raiding the veg patch!'
   if (p.s === 'flee' || p.s === 'hide') return 'scared!'
   if (p.s === 'scoot') return 'being herded'
   if (p.s === 'mope') return p.hunger < 35 ? 'weak with hunger' : p.issues ? 'feeling poorly' : 'glum'

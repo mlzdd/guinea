@@ -433,7 +433,9 @@ describe('the farm over time', () => {
       farm.tick(TICK_MS)
       for (const p of farm.pigs) {
         if (p.state === 'lost' || p.state === 'carried' || p.state === 'held') continue
-        if (!pigCanStand(p, -0.05)) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
+        // Sneaky pigs raiding a veg patch are allowed inside its fence.
+        const ok = p.state === 'raid' ? onFarm(p) && gardens().some((g) => inRect(p, g, 0.5)) || pigCanStand(p, -0.05) : pigCanStand(p, -0.05)
+        if (!ok) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
       }
     }
   })
@@ -446,7 +448,9 @@ describe('the farm over time', () => {
       farm.tick(TICK_MS)
       for (const p of farm.pigs) {
         if (p.state === 'lost' || p.state === 'carried' || p.state === 'held') continue
-        if (!pigCanStand(p, -0.05)) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
+        // Sneaky pigs raiding a veg patch are allowed inside its fence.
+        const ok = p.state === 'raid' ? onFarm(p) && gardens().some((g) => inRect(p, g, 0.5)) || pigCanStand(p, -0.05) : pigCanStand(p, -0.05)
+        if (!ok) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
       }
     }
   })
@@ -742,6 +746,24 @@ describe('money and upgrades', () => {
     expect(report.stars).toBeGreaterThanOrEqual(2)
     expect(farm.coins).toBe(before + report.total)
     expect(report.coins).toBe(farm.coins)
+  })
+
+  it('baskets are kept by name: through leaving, saving and loading', () => {
+    const { farm, id, me } = setup()
+    me.basket[veg('carrot')] = 5
+    me.hay = 2
+    // Saved while on the farm, loaded into a fresh server, then back again.
+    const again = new Farm(seeded(5), JSON.parse(JSON.stringify(farm.save())))
+    const back = again.farmers.get(again.join('Ann', 0)!)!
+    expect(back.basket[veg('carrot')]).toBe(5)
+    expect(back.hay).toBe(2)
+    // Someone else doesn't get it; going home and coming back keeps it.
+    expect(again.farmers.get(again.join('Bo', 0)!)!.basket[veg('carrot')]).toBe(0)
+    farm.sacks = 0
+    me.sack = true
+    farm.leave(id)
+    expect(farm.sacks).toBe(1) // the sack went back in the bin
+    expect(farm.farmers.get(farm.join('Ann', 0)!)!.basket[veg('carrot')]).toBe(5)
   })
 
   it('a farm saves its coins, upgrades and pellets', () => {

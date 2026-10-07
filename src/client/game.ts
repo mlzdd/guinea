@@ -21,6 +21,7 @@ import {
   SALAD_MIN,
   RUN_SPEED,
   HAWK_SHOO_EXTRA,
+  isSneaky,
   farmerSpeed,
   shooRadius,
   THROW_RANGE,
@@ -177,8 +178,8 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.bubbles = new Bubbles(this.world.scene)
     this.input = new Input(canvas)
-    this.input.onClick = () => this.act()
-    this.input.onThrow = () => this.throwVeg()
+    // A click does what E would; with nothing to do, it throws.
+    this.input.onClick = () => (this.action?.msg ? this.act() : this.throwVeg())
     this.hud.onSlot = (i) => this.slot(i)
     this.input.onKey = (code) => this.key(code)
 
@@ -776,6 +777,8 @@ export class Game {
           return say(pickOne(WHEEK), 'wheek', 1.3)
         case 'eat':
           return say(pickOne(MONCH), 'monch', 1.2)
+        case 'raid':
+          return say(pickOne(['shh… 🤫', 'nobody look…', '🤫']), 'plain', 3)
         case 'flee':
           return say(pickOne(['EEK!', 'EEEK!', 'eek eek!']), 'eek', 1.5)
         case 'carried':
@@ -806,6 +809,8 @@ export class Game {
     if (this.clock < v.nextChatter) return
     if (v.strut && Math.random() < 0.5) return say(pickOne(['rrrrrr', 'rumble rumble', 'rrrumble~']), 'love', 4)
     switch (s) {
+      case 'raid':
+        return say(pickOne(['nom nom 🤫', 'munch munch', 'shh… nom']), 'monch', 2.5)
       case 'eat':
         return say(pickOne(MONCH), 'monch', 1.3)
       case 'seek':
@@ -844,6 +849,7 @@ export class Game {
     const bits: string[] = []
     const name = (id: number | undefined) => (id === undefined ? undefined : this.looks[id]?.name)
     if (look.adopter) bits.push(`⭐ ${look.adopter}’s piggy`)
+    if (isSneaky(look.id)) bits.push('🤫 a sneaky one: keep an eye on the veg patch')
     if (name(look.friend)) bits.push(`💕 best friends with ${name(look.friend)}`)
     if (look.age === 0 && name(look.mum)) bits.push(`🐣 mum is ${name(look.mum)}`)
     if (look.due !== undefined && this.snap) {

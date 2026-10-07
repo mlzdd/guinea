@@ -15,6 +15,10 @@ export const FIRST_DAY_MS = 4 * 60_000
 export const DAY_RAMP = 4
 /** Fraction of the day when night falls (it ends at 1.0 = dawn). */
 export const NIGHT_START = 0.76
+/** At dusk (about half an hour before dark) the piggies start heading in for the night. */
+export const HEAD_HOME = NIGHT_START - 0.03
+/** An hour after dark (9pm): pigs still out now count as out after dark, and can catch the sniffles. */
+export const OUT_LATE = NIGHT_START + (1 - NIGHT_START) / 10
 /** A fresh farm starts in the morning. */
 export const START_TIME = 0.05
 /** Pigs sleep at their bed spots (BED_SPOTS in map.ts); only this many will doze off on a food pile instead. */
@@ -131,6 +135,20 @@ export const SEEK_RADIUS = 14
 export const SNACKY = 85
 /** Chance, each time a pig picks what to do by day, that it goes on a snack trip: under an apple tree or to the garden fence. */
 export const SNACK_TRIP = 0.3
+/** Best friends: the chance a pig goes to find its friend when apart, or stays put beside it when together. */
+export const FRIEND_SEEK = 0.55
+export const FRIEND_STAY = 0.35
+/**
+ * Sneaky piggies (about a third of them, `isSneaky`) sometimes squeeze under a veg patch fence when they're peckish
+ * (RAID_CHANCE each time they pick what to do by day) and munch away at a growing bed with no farmer near it. It fills
+ * them up, but the bed doesn't grow while they're in it. They squeeze back out when full, after RAID_MS, at dusk, or
+ * when a farmer comes within RAID_SPOOK.
+ */
+export const SNEAKY = 0.3
+export const isSneaky = (pigId: number) => (pigId * 0.7548) % 1 < SNEAKY
+export const RAID_CHANCE = 0.2
+export const RAID_MS: [number, number] = [20_000, 40_000]
+export const RAID_SPOOK = 3
 /**
  * Poorly piggies (hungry, glum, or with something wrong, even the hidden nails and teeth) go slow and mope about in
  * corners, so you can tell who needs looking after.
@@ -150,6 +168,13 @@ export const HERD_SPEED = 2.5
 /** How far a pig scoots, and how fast. */
 export const HERD_STEP = 2.5
 export const PIG_SCOOT = 3.2
+/**
+ * Guinea pig trains: a pig on the move tags along behind another just ahead of it (within TRAIN_RADIUS) that's
+ * going the same way, TRAIN_GAP behind, until it's nearly where it's going (TRAIN_LEAVE) or the leader stops.
+ */
+export const TRAIN_RADIUS = 2.5
+export const TRAIN_GAP = 0.75
+export const TRAIN_LEAVE = 1.5
 /** Hungry pigs near a farmer with a full basket beg. */
 export const BEG_RADIUS = 5
 
@@ -157,6 +182,8 @@ export const BEG_RADIUS = 5
 export const ISSUES = ['nails', 'mites', 'sniffles', 'teeth'] as const
 export type Issue = (typeof ISSUES)[number]
 export const ISSUE_BIT: Record<Issue, number> = { nails: 1, mites: 2, sniffles: 4, teeth: 8 }
+/** Problems you can see without a health check (scratching, sneezing): what still counts as poorly at dawn. */
+export const VISIBLE_ISSUES = ISSUE_BIT.mites | ISSUE_BIT.sniffles
 /** Chance per second of a problem starting. Sniffles only come from being outside at night. */
 export const ISSUE_RATE: Record<Issue, number> = { nails: 1 / 2400, mites: 1 / 3600, sniffles: 1 / 60, teeth: 1 / 6000 }
 
@@ -395,8 +422,8 @@ export const JOBS: Partial<Record<Stat, { goal: number; text: string; needs?: Sq
 export const JOB_KINDS = Object.keys(JOBS) as Stat[]
 
 // Breeding: now and then a happy, well-fed sow (with a boar about, and room in the barn) gets pregnant.
-/** Chance per day for each sow who's happy enough. Low, so the herd grows slowly. */
-export const PREGNANCY_PER_DAY = 0.08
+/** Chance per day for each sow who's happy enough (more with the nursery). */
+export const PREGNANCY_PER_DAY = 0.2
 export const PREGNANT_HAPPY = 60
 /** A pregnancy lasts this many days. */
 export const PREGNANCY_DAYS = 2
@@ -405,8 +432,9 @@ export const PREGNANT_HUNGER = 1.4
 /** …and count as looked after while their tummy and happiness are at least this. A cuddle counts for this many seconds. */
 export const CARE_OK = 60
 export const CARE_CUDDLE_S = 30
-/** How likely a litter of 1, 2, 3 or 4 is (4 is rare). Poorly looked-after mums have smaller litters. */
-export const LITTER = [0.35, 0.35, 0.22, 0.08]
+/** How likely a litter of LITTER_MIN, +1, +2… is: 2, 3, 4 or 5 (5 is rare). Poorly looked-after mums have smaller litters. */
+export const LITTER = [0.38, 0.32, 0.2, 0.1]
+export const LITTER_MIN = 2
 /** Pups grow from half size and follow mum about for this many days. */
 export const PUP_DAYS = 3
 

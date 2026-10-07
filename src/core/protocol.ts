@@ -20,6 +20,8 @@ export type PigState =
   | 'mope'
   /** Being herded: scooting out of a farmer's way. */
   | 'scoot'
+  /** Sneaked into a veg patch: squeezing in, munching a bed (it stops growing), or squeezing back out. */
+  | 'raid'
   | 'scratch'
   | 'sneeze'
   | 'held'

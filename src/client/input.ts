@@ -1,6 +1,6 @@
 /**
  * Keyboard and mouse. No pointer lock: the mouse aims at the ground and clicks buttons in the
- * health-check card like any web page. Left click does what E does, right click throws, the wheel
+ * health-check card like any web page. A click does what E does (or throws, if there's nothing to do), the wheel
  * zooms. The camera never turns.
  */
 export class Input {
@@ -9,10 +9,8 @@ export class Input {
   readonly mouse = { x: 0, y: 0, over: false }
   /** Accumulated zoom steps since last read. */
   private zoom = 0
-  /** Left click: the same as E. */
+  /** Left click. */
   onClick: () => void = () => {}
-  /** Right click: throw. */
-  onThrow: () => void = () => {}
   onKey: (code: string) => void = () => {}
 
   constructor(canvas: HTMLCanvasElement) {
@@ -30,7 +28,6 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault())
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button === 0) this.onClick()
-      if (e.button === 2) this.onThrow()
     })
     canvas.addEventListener('pointermove', (e) => {
       const r = canvas.getBoundingClientRect()

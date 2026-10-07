@@ -436,6 +436,13 @@ export function settlePig(p: P, radius: number): void {
   clampTo(p, BOUNDS, radius)
 }
 
+/** Like settlePig, but for a pig squeezing under a veg patch fence: the gardens don't stop it. */
+export function settleRaider(p: P, radius: number): void {
+  const gs = gardens()
+  pushOut(p, radius, PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)))
+  clampTo(p, BOUNDS, radius)
+}
+
 /** True if a point is somewhere a pig can stand, with some room around it. */
 export function pigCanStand(p: P, pad = 0.6): boolean {
   if (!onFarm(p) || !inRect(p, BOUNDS, -pad)) return false

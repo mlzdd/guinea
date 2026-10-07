@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { pigCanStand, BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
@@ -31,6 +31,9 @@ import {
   JUMP_V,
   JOBS_PER_DAY,
   NIGHT_START,
+  isSneaky,
+  HEAD_HOME,
+  OUT_LATE,
   PUP_DAYS,
   RAIN_GROW,
   SHOW_PRIZE,
@@ -346,7 +349,7 @@ describe('babies', () => {
     expect(full.pigs.some((p) => p.due !== undefined)).toBe(false)
   })
 
-  it('litters are 1 to 4 (4 is rare), smaller for a mum nobody looked after', () => {
+  it('litters are 2 to 5 (5 is rare), smaller for a mum nobody looked after', () => {
     expect(LITTER.reduce((a, b) => a + b, 0)).toBeCloseTo(1)
     const sizes: number[] = []
     for (let seed = 1; seed <= 80; seed++) {
@@ -355,16 +358,16 @@ describe('babies', () => {
       Object.assign(mum, { careGood: 100, careTotal: 100 })
       sizes.push(farm.giveBirth(mum).length)
     }
-    expect(Math.min(...sizes)).toBe(1)
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(4)
-    expect(sizes.filter((n) => n >= 2).length).toBeGreaterThan(30)
-    expect(sizes.filter((n) => n === 4).length).toBeLessThan(20)
+    expect(Math.min(...sizes)).toBe(2)
+    expect(Math.max(...sizes)).toBe(5)
+    expect(sizes.filter((n) => n >= 3).length).toBeGreaterThan(30)
+    expect(sizes.filter((n) => n === 5).length).toBeLessThan(20)
 
     for (let seed = 1; seed <= 20; seed++) {
       const { farm } = setup(seed)
       const mum = farm.pigs[0]
       Object.assign(mum, { careGood: 0, careTotal: 100 })
-      expect(farm.giveBirth(mum)).toHaveLength(1)
+      expect(farm.giveBirth(mum)).toHaveLength(2)
     }
   })
 
@@ -802,5 +805,111 @@ describe('new messages', () => {
     for (const t of ['adopt', 'door', 'diary', 'salad', 'serve', 'sack', 'putdown', 'cuddle', 'shoo']) expect(parseClientMsg(JSON.stringify({ t }))).toEqual({ t })
     expect(parseClientMsg(JSON.stringify({ t: 'hay', patch: 2 }))).toEqual({ t: 'hay', patch: 2 })
     expect(parseClientMsg(JSON.stringify({ t: 'hay' }))).toBeNull()
+  })
+})
+
+describe('bedtime and the morning report', () => {
+  it('pigs head in at dusk, and only count as out after dark once the grace hour is up', () => {
+    const { farm } = setup()
+    const p = lonePig(farm, 2, 6, 100)
+    expect(isInside(p)).toBe(false)
+    const outside = () => {
+      Object.assign(p, { x: 2, z: 6, state: 'idle', until: farm.t + 60_000 })
+    }
+
+    // Dusk: off home before it gets dark.
+    farm.t = farmTime(HEAD_HOME) - 200
+    outside()
+    run(farm, 500)
+    expect(p.state).toBe('home')
+
+    // Still out just after dark: not counted yet.
+    farm.t = farmTime(NIGHT_START) + 500
+    outside()
+    run(farm, 200)
+    expect(farm['today'].outAtNight.has(p.id)).toBe(false)
+
+    // Still out at 9pm: that counts.
+    farm.t = farmTime(OUT_LATE) + 100
+    outside()
+    run(farm, 100)
+    expect(farm['today'].outAtNight.has(p.id)).toBe(true)
+  })
+
+  it('only problems you can see count as still poorly, and the report says which', () => {
+    const { farm } = setup()
+    for (const p of farm.pigs) p.issues = 0
+    farm.pigs[0].issues = ISSUE_BIT.nails | ISSUE_BIT.teeth // looks fine
+    farm.pigs[1].issues = ISSUE_BIT.mites
+    farm.pigs[2].issues = ISSUE_BIT.mites | ISSUE_BIT.sniffles
+    farm.payDay()
+    const line = report(farm).lines.find((l) => l.label.includes('Still poorly'))!
+    expect(line.label).toContain('2: 2 mites, sniffles')
+    expect(line.coins).toBe(2 * PAY.poorly)
+  })
+})
+
+describe('guinea pig trains', () => {
+  it('two pigs going the same way walk in a line, then each goes to its own spot', () => {
+    const { farm } = setup()
+    const a = lonePig(farm, 2, 4, 100)
+    const b = farm.pigs.find((p) => p !== a)!
+    for (const p of farm.pigs) if (p !== a && p !== b) Object.assign(p, { state: 'sleep', until: Infinity })
+    // Both off across the yard, the same way; a is a little ahead and a bit to one side.
+    Object.assign(a, { x: 2, z: 4, state: 'wander', tx: 2, tz: 14, until: Infinity, hunger: 100, happy: 90, issues: 0 })
+    Object.assign(b, { x: 2.6, z: 3, state: 'wander', tx: 2.6, tz: 14.5, until: Infinity, hunger: 100, happy: 90, issues: 0 })
+    let behind = 0
+    for (let i = 0; i < 60; i++) {
+      run(farm, 100)
+      if (b.follow === a.id) behind++
+    }
+    expect(behind).toBeGreaterThan(30)
+    // In a line: b has fallen in right behind a.
+    expect(Math.abs(b.x - a.x)).toBeLessThan(0.4)
+    expect(a.z - b.z).toBeGreaterThan(0.4)
+    // Nearly there, it peels off for its own spot.
+    run(farm, 15_000, () => b.state !== 'wander')
+    expect(Math.hypot(b.x - 2.6, b.z - 14.5)).toBeLessThan(0.5)
+  })
+})
+
+describe('sneaky piggies', () => {
+  it('squeeze into the veg patch and munch a bed, which stops growing, until a farmer catches them', () => {
+    const { farm, me } = setup()
+    const p = lonePig(farm, 2, 9, 40)
+    Object.assign(me, { x: -30, z: 20 })
+    const bed = farm.beds[0]
+    Object.assign(bed, { stage: 'growing', plantedAt: farm.t, readyAt: farm.t + 50_000 })
+    farm['startRaid'](p, 0)
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('sneaked into the veg patch'))).toBe(true)
+    expect(run(farm, 15_000, () => p.munchFrom > 0)).toBe(true)
+    expect(Math.hypot(p.x - BEDS[0].x, p.z - BEDS[0].z)).toBeLessThan(1.5)
+
+    // Munching away: tummy fills, the bed stands still.
+    const grow = () => (farm.t - bed.plantedAt) / (bed.readyAt - bed.plantedAt)
+    const before = grow()
+    const hunger = p.hunger
+    run(farm, 4000)
+    expect(p.state).toBe('raid')
+    expect(p.hunger).toBeGreaterThan(hunger)
+    expect(grow()).toBeCloseTo(before, 5)
+
+    // A farmer comes along: caught! Out it squeezes, and the bed grows again.
+    Object.assign(me, { x: p.x + 1.5, z: p.z })
+    run(farm, 200)
+    expect(alerts(farm, 'fun').some((a) => a.text.startsWith('🥬 Caught!'))).toBe(true)
+    expect(p.raid).toBeNull()
+    Object.assign(me, { x: -30, z: 20 })
+    expect(run(farm, 10_000, () => p.state !== 'raid')).toBe(true)
+    expect(pigCanStand(p, -0.05)).toBe(true)
+    const after = grow()
+    run(farm, 2000)
+    expect(grow()).toBeGreaterThan(after)
+  })
+
+  it('only some piggies are sneaky', () => {
+    const sneaky = Array.from({ length: 30 }, (_, i) => isSneaky(i)).filter(Boolean).length
+    expect(sneaky).toBeGreaterThan(5)
+    expect(sneaky).toBeLessThan(15)
   })
 })
