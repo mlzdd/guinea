@@ -83,7 +83,7 @@ describe('productive land features', () => {
     farm.coins = 1000
     farm.upgrades = [...tiers('garden', 1), ...tiers('meadow', 2)]
     const bed = BEDS.find((b) => b.square === 'garden')!
-    farm.beds[bed.id] = { stage: 'growing', plantedAt: farm.t - 10_000, readyAt: farm.t + 40_000 }
+    farm.beds[bed.id] = { stage: 'growing', plantedAt: farm.t - 10_000, readyAt: farm.t + 40_000, eaten: 0 }
     farm.hayField[0] = farm.t + 60_000
     farm.handle(id, { t: 'buy', upgrade: 'land_garden' })
     expect(farm.beds[bed.id].readyAt - farm.t).toBe(30_000)

@@ -153,9 +153,10 @@ export const BED_SPOTS: P[] = [
 /** Veg gardens: fenced so pigs can't raid them, each with a gate for farmers. One little one in the yard to start. */
 export interface Garden extends Rect {
   square: SquareId
-  /** The fence, with its gate gap. */
+  /** The fence, with its gate gap; the middle of the gap, and the way out through it. */
   fence: Rect[]
   gate: P
+  out: P
 }
 const fenced = (square: SquareId, b: Rect, side: 'n' | 's' | 'e' | 'w', g0: number, g1: number): Garden => {
   const T = 0.1
@@ -173,7 +174,8 @@ const fenced = (square: SquareId, b: Rect, side: 'n' | 's' | 'e' | 'w', g0: numb
   })
   const mid = (g0 + g1) / 2
   const gate = side === 'n' ? { x: mid, z: b.z0 } : side === 's' ? { x: mid, z: b.z1 } : side === 'w' ? { x: b.x0, z: mid } : { x: b.x1, z: mid }
-  return { ...b, square, fence, gate }
+  const out = { n: { x: 0, z: -1 }, s: { x: 0, z: 1 }, w: { x: -1, z: 0 }, e: { x: 1, z: 0 } }[side]
+  return { ...b, square, fence, gate, out }
 }
 export const GARDENS: Garden[] = [
   fenced('yard', r(4, 11.5, 0.5, 7.5), 'w', 3, 5.5),
@@ -222,6 +224,38 @@ export const HIDEY_D = 1.4
 /** Up to the ridge of the roof. */
 export const HIDEY_H = 1.1
 const hutRect = (h: P) => r(h.x - HIDEY_W / 2, h.x + HIDEY_W / 2, h.z - HIDEY_D / 2, h.z + HIDEY_D / 2)
+/**
+ * Play tunnels in the hut meadow: open-ended tubes along x or z, from `a` to `b`. Happy, well-fed pigs love a scurry
+ * through one. To a pig the sides are walls; the ends are open.
+ */
+export interface Tunnel {
+  a: P
+  b: P
+  square: SquareId
+}
+export const TUNNELS: Tunnel[] = [
+  { a: { x: -11, z: 14.5 }, b: { x: -6.5, z: 14.5 }, square: 'huts' },
+  { a: { x: 2.5, z: 15.5 }, b: { x: 6.5, z: 15.5 }, square: 'huts' },
+  { a: { x: -3.5, z: 19.5 }, b: { x: -3.5, z: 23.5 }, square: 'huts' },
+]
+/** Inside of a tunnel, from the middle to the wall. */
+export const TUNNEL_R = 0.45
+const tunnelRect = (t: Tunnel, pad: number) => r(Math.min(t.a.x, t.b.x) - (t.a.x === t.b.x ? pad : 0), Math.max(t.a.x, t.b.x) + (t.a.x === t.b.x ? pad : 0), Math.min(t.a.z, t.b.z) - (t.a.z === t.b.z ? pad : 0), Math.max(t.a.z, t.b.z) + (t.a.z === t.b.z ? pad : 0))
+const tunnelWalls = (t: Tunnel): Rect[] => {
+  const T = 0.1
+  const out = tunnelRect(t, TUNNEL_R + T)
+  // The two long sides.
+  return t.a.z === t.b.z
+    ? [r(out.x0, out.x1, out.z0, out.z0 + T), r(out.x0, out.x1, out.z1 - T, out.z1)]
+    : [r(out.x0, out.x0 + T, out.z0, out.z1), r(out.x1 - T, out.x1, out.z0, out.z1)]
+}
+/** Just outside one end of a tunnel (`end` 0 = a, 1 = b), lined up to run through it. */
+export const tunnelMouth = (t: Tunnel, end: 0 | 1): P => {
+  const [from, to] = end === 0 ? [t.a, t.b] : [t.b, t.a]
+  const d = dist(from, to)
+  return { x: from.x - ((to.x - from.x) / d) * 0.6, z: from.z - ((to.z - from.z) / d) * 0.6 }
+}
+
 /** To a pig a hut is its roof down both sides and the back wall: the only way in is the open front (south). */
 const hutWalls = (h: P): Rect[] => {
   const b = hutRect(h)
@@ -337,7 +371,8 @@ export function setLand(ids: readonly SquareId[]) {
   const huts = hideys().flatMap(hutWalls)
   HUT_SOLIDS.clear()
   for (const w of huts) HUT_SOLIDS.add(w)
-  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...huts])
+  const tubes = tunnels().flatMap(tunnelWalls)
+  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...huts, ...tubes])
   fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...pond, DOOR_GATE])
   const tall = (h: number) => (b: Rect): Block => ({ ...b, h })
   fill(FARMER_BLOCKS, [
@@ -347,8 +382,12 @@ export function setLand(ids: readonly SquareId[]) {
     ...gardens.flatMap((g) => g.fence).map(tall(0.75)),
     ...FENCE.map(tall(1.2)),
     ...hideys().map(hutRect).map(tall(HIDEY_H)),
+    ...tunnels().map((t) => tunnelRect(t, TUNNEL_R + 0.1)).map(tall(TUNNEL_R * 2)),
   ])
 }
+
+/** The play tunnels on land the farm owns. */
+export const tunnels = () => TUNNELS.filter((t) => owns(t.square))
 
 /** The hidey huts on land the farm owns. */
 export const hideys = () => HIDEYS.filter((h) => owns(h.square))
@@ -536,15 +575,19 @@ export function settlePig(p: P, radius: number): void {
 
 /** Like settlePig, but for a pig squeezing under a veg patch fence: the gardens don't stop it. */
 export function settleRaider(p: P, radius: number): void {
-  const gs = gardens()
-  pushOut(p, radius, PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)))
+  pushOut(p, radius, pigSolids(true, []))
   clampTo(p, BOUNDS, radius)
 }
 
-/** Pig solids, for a raider (who squeezes under the garden fences) or not, plus anything `extra` (the shut barn door). */
+/** The veg garden a point's in, if any (a raider, say). */
+export const gardenAt = (p: P) => gardens().find((g) => inRect(p, g))
+
+/** Pig solids, for a raider (who gets into the gardens by the gate) or not, plus anything `extra` (the shut barn door). */
 const pigSolids = (raid: boolean, extra: Rect[]) => {
+  if (!raid) return extra.length ? [...PIG_SOLIDS, ...extra] : PIG_SOLIDS
+  // In (or getting into) a garden: its fence is in the way, all but the gate.
   const gs = gardens()
-  return [...(raid ? PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)) : PIG_SOLIDS), ...extra]
+  return [...PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)), ...gs.flatMap((g) => g.fence), ...extra]
 }
 
 /** Is the straight line from a to b blocked for a pig (by anything bar the hidey huts, which `hutStep` sees to)? */
@@ -565,8 +608,8 @@ const costs = new Float64Array(COLS_N * ROWS_N)
 const prevs = new Int32Array(COLS_N * ROWS_N)
 const seen = new Uint32Array(COLS_N * ROWS_N)
 let search = 0
-/** A search gives up after looking at this many cells (no way there, or a very long way round). */
-const MAX_EXPAND = 6000
+/** A search looks at each cell at most once, so at worst (no way there) it looks at the whole farm. */
+const MAX_EXPAND = COLS_N * ROWS_N
 /** Which cells a pig can stand in, worked out once per layout (land, raider or not, door). */
 const grids = new Map<string, Uint8Array>()
 function freeGrid(radius: number, raid: boolean, extra: Rect[]): Uint8Array {

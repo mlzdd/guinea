@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { pigCanStand, BEDS, GARDENS, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { pigCanStand, BEDS, GARDENS, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
   CRAVING_HAPPY,
+  RAID_EAT_MS,
+  PEEK_HAPPY,
+  PLAY_FULL,
+  TUNNEL_HAPPY,
+  harvestYield,
   DAY_MS,
   DAY_RAMP,
   START_TIME,
@@ -944,6 +949,71 @@ describe('finding the way', () => {
   })
 })
 
+describe('playtime in the hut meadow', () => {
+  it('full, happy piggies scurry through the play tunnels, in one end and out the other, and love it', () => {
+    const { farm } = setup()
+    const t = TUNNELS[0]
+    const p = lonePig(farm, t.a.x - 3, t.a.z + 2, 100)
+    p.happy = 50
+    const dice = farm as unknown as { rand: () => number }
+    dice.rand = () => 0 // a tunnel, the first one
+    expect(farm['startPlay'](p)).toBe(true)
+    dice.rand = seeded(3)
+    expect(p.state).toBe('tunnel')
+    // Inside the tube it's right down the middle: never through its sides.
+    const along = t.a.z === t.b.z ? 'x' : 'z'
+    const across = along === 'x' ? 'z' : 'x'
+    const [lo, hi] = [Math.min(t.a[along], t.b[along]), Math.max(t.a[along], t.b[along])]
+    let through = false
+    expect(
+      run(farm, 30_000, () => {
+        if (p[along] > lo + 0.3 && p[along] < hi - 0.3) {
+          expect(Math.abs(p[across] - t.a[across])).toBeLessThan(TUNNEL_R)
+          if (p.playing) through = true
+        }
+        return p.state !== 'tunnel'
+      }),
+    ).toBe(true)
+    expect(through).toBe(true)
+    expect(p.happy).toBeGreaterThanOrEqual(50 + TUNNEL_HAPPY - 1)
+  })
+
+  it('or play hide and seek in a hidey hut', () => {
+    const { farm } = setup()
+    const hut = HIDEYS.find((h) => h.square === 'huts')!
+    const p = lonePig(farm, hut.x + 3, hut.z + 3, 100)
+    p.happy = 50
+    const dice = farm as unknown as { rand: () => number }
+    dice.rand = () => 0.99 // a hut, not a tunnel
+    expect(farm['startPlay'](p)).toBe(true)
+    dice.rand = seeded(3)
+    expect(p.state).toBe('peek')
+    expect(run(farm, 20_000, () => p.playing)).toBe(true)
+    expect(farm.hidden(p)).toBe(true)
+    expect(run(farm, 12_000, () => p.state !== 'peek')).toBe(true)
+    expect(p.happy).toBeGreaterThan(50 + PEEK_HAPPY * 4)
+  })
+
+  it('only when their tummies are nearly full', () => {
+    const { farm } = setup()
+    const p = lonePig(farm, 0, 14, PLAY_FULL - 20)
+    p.happy = 80
+    let played = 0
+    for (let i = 0; i < 200; i++) {
+      farm['decide'](p)
+      if (p.state === 'tunnel' || p.state === 'peek') played++
+    }
+    expect(played).toBe(0)
+    p.hunger = 100
+    for (let i = 0; i < 200; i++) {
+      p.hunger = 100
+      farm['decide'](p)
+      if (p.state === 'tunnel' || p.state === 'peek') played++
+    }
+    expect(played).toBeGreaterThan(10)
+  })
+})
+
 describe('hidey huts', () => {
   it('pigs only get in and out by the open front, round the back and sides', () => {
     const { farm } = setup()
@@ -977,7 +1047,7 @@ describe('hidey huts', () => {
 })
 
 describe('sneaky piggies', () => {
-  it('squeeze into the veg patch and munch a bed, which stops growing, until a farmer catches them', () => {
+  it('sneak into the veg patch and munch a bed, which stops growing, until a farmer catches them', () => {
     const { farm, me } = setup()
     const p = lonePig(farm, 2, 9, 40)
     Object.assign(me, { x: -30, z: 20 })
@@ -1012,7 +1082,7 @@ describe('sneaky piggies', () => {
     expect(grow()).toBeGreaterThan(after)
   })
 
-  it('find their way into any patch: round apple trees, along the barn, under the fence into the bed', () => {
+  it('find their way into any patch: round apple trees, along the barn, in by the gate to the bed, and out by it', () => {
     // From the orchard (trees in the way) to the far veg patch, and from the yard to the one behind the barn.
     for (const [bed, x, z] of [
       [4, 20, 0],
@@ -1025,10 +1095,51 @@ describe('sneaky piggies', () => {
       const p = lonePig(farm, x, z, 40)
       Object.assign(farm.beds[bed], { stage: 'growing', plantedAt: farm.t, readyAt: farm.t + 500_000 })
       expect(farm['startRaid'](p, bed)).toBe(true)
-      expect(run(farm, 60_000, () => p.munchFrom > 0)).toBe(true)
+      // In by the gate, never through the fence…
+      const garden = GARDENS.find((g) => g.square === BEDS[bed].square)!
+      let was = inRect(p, garden)
+      const byGate = () => {
+        const now = inRect(p, garden)
+        if (now !== was) expect(Math.hypot(p.x - garden.gate.x, p.z - garden.gate.z)).toBeLessThan(1.6)
+        was = now
+      }
+      expect(run(farm, 60_000, () => (byGate(), p.munchFrom > 0))).toBe(true)
       expect(Math.hypot(p.x - BEDS[bed].x, p.z - BEDS[bed].z)).toBeLessThan(1.5)
-      expect(GARDENS.some((g) => inRect(p, g))).toBe(true)
+      expect(inRect(p, garden)).toBe(true)
+      // …and out the same way when it's caught.
+      Object.assign(me, { x: p.x + 1.5, z: p.z })
+      run(farm, 200)
+      Object.assign(me, { x: -30, z: 24 })
+      expect(run(farm, 40_000, () => (byGate(), !inRect(p, garden) && p.state !== 'raid'))).toBe(true)
     }
+  })
+
+  it('raid ripe beds too, eating the harvest a veg at a time (never all of it)', () => {
+    const { farm, id, me } = setup()
+    const p = lonePig(farm, 2, 9, 20)
+    Object.assign(me, { x: -30, z: 20 })
+    const bed = farm.beds[0]
+    Object.assign(bed, { stage: 'ripe', eaten: 0 })
+    expect(farm['raidTarget'](p)).toBe(0)
+    farm['startRaid'](p, 0)
+    expect(run(farm, 15_000, () => p.munchFrom > 0)).toBe(true)
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('eating the ripe'))).toBe(true)
+    // A bottomless appetite: it stays till it's eaten all it can.
+    p.until = Infinity
+    run(farm, RAID_EAT_MS * 10, () => {
+      p.hunger = 0
+      return false
+    })
+    const crop = harvestYield(farm.upgrades, BEDS[0].square)
+    expect(bed.eaten).toBe(crop - 1)
+    expect(p.raid).toBeNull() // nothing left worth having: off it goes
+    expect(farm.snapshot().beds[0].left).toBeCloseTo(1 / crop, 2)
+
+    // What's left is what you get.
+    Object.assign(me, { x: BEDS[0].x + 2, z: BEDS[0].z, basket: [0, 0, 0, 0, 0], hay: 0 })
+    farm.handle(id, { t: 'harvest', bed: 0 })
+    expect(me.basket[veg(BEDS[0].kind)]).toBe(1)
+    expect(bed.eaten).toBe(0)
   })
 
   it('only some piggies are sneaky', () => {

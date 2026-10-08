@@ -34,6 +34,8 @@ import {
   nextStep,
   gardens,
   hideys,
+  tunnels,
+  tunnelMouth,
   nearestFence,
   offFarm,
   onFarm,
@@ -52,6 +54,7 @@ import {
   settleFarmer,
   settlePig,
   settleRaider,
+  gardenAt,
   GARDENS,
   type P,
 } from './map.ts'
@@ -174,6 +177,13 @@ import {
   TRAIN_LEAVE,
   TRAIN_RADIUS,
   PIG_SCURRY,
+  PEEK_HAPPY,
+  PEEK_MS,
+  PLAY_CHANCE,
+  PLAY_FULL,
+  PLAY_HAPPY,
+  PLAY_RANGE,
+  TUNNEL_HAPPY,
   PIG_WALK,
   POORLY_PACE,
   PUP_DAYS,
@@ -192,6 +202,7 @@ import {
   FRIEND_SEEK,
   FRIEND_STAY,
   RAID_CHANCE,
+  RAID_EAT_MS,
   RAID_MS,
   RAID_RANGE,
   RAID_SPOOK,
@@ -267,8 +278,12 @@ export interface Pig extends PigLook {
   follow: number | null
   /** The veg bed it's sneaked in to munch (state 'raid'); null while squeezing back out. */
   raid: number | null
-  /** When it started munching (0 = still squeezing in). */
+  /** When it started munching (0 = still squeezing in), and last ate a veg off a ripe bed. */
   munchFrom: number
+  ateAt: number
+  /** Playing ('tunnel' / 'peek'): which tunnel (or hut), and whether it's got there yet (then through, or hiding). */
+  play: number
+  playing: boolean
   /** Its way round walls and fences (waypoints still to go), and where that way leads. */
   path: P[]
   pathFor: P | null
@@ -295,6 +310,8 @@ interface Bed {
   stage: BedSnap['stage']
   plantedAt: number
   readyAt: number
+  /** Veg a sneaky pig has eaten off it while ripe (the harvest is that many short). */
+  eaten: number
 }
 
 export interface Pred {
@@ -352,7 +369,7 @@ export interface FarmSave {
   land: string[]
   looks: PigLook[]
   pigs: { x: number; z: number; hunger: number; happy: number; issues: number; care?: [number, number] }[]
-  beds: { stage: BedSnap['stage']; left: number }[]
+  beds: { stage: BedSnap['stage']; left: number; eaten?: number }[]
   bowls: number[]
   hoppers?: number[]
   coins?: number
@@ -400,7 +417,7 @@ const zeroStats = () => Object.fromEntries(STATS.map((s) => [s, 0])) as Record<S
 
 const SPEED: Partial<Record<PigState, number>> = { wander: PIG_WALK, home: PIG_WALK * 1.5, seek: PIG_SCURRY, flee: PIG_FLEE, zoom: PIG_SCURRY, scoot: PIG_SCOOT }
 /** States a pig can be interrupted out of by food, begging or nightfall. */
-const CALM: PigState[] = ['idle', 'wander', 'graze', 'beg', 'popcorn', 'zoom', 'mope', 'scoot', 'scratch', 'sneeze']
+const CALM: PigState[] = ['idle', 'wander', 'graze', 'beg', 'popcorn', 'zoom', 'mope', 'scoot', 'scratch', 'sneeze', 'tunnel', 'peek']
 /** Calm pigs that a farmer walking at them will herd along (not ones begging for veg). */
 const HERDABLE: PigState[] = ['idle', 'wander', 'graze', 'popcorn', 'zoom', 'mope', 'scoot', 'scratch', 'sneeze', 'home']
 /** States that don't get shoved about by other pigs. */
@@ -493,7 +510,7 @@ export class Farm {
     this.pigs = makePigLooks(PIG_COUNT, rand).map((look) => this.newPig(look))
     this.beds = BEDS.map((b, i) =>
       // The yard's little bed is ready to go; the rest start empty (and unbought).
-      b.square === 'yard' ? { stage: i % 2 ? 'growing' : 'ripe', plantedAt: 0, readyAt: this.between(10_000, GROW_MS) } : { stage: 'empty', plantedAt: 0, readyAt: 0 },
+      b.square === 'yard' ? { stage: i % 2 ? 'growing' : 'ripe', plantedAt: 0, readyAt: this.between(10_000, GROW_MS), eaten: 0 } : { stage: 'empty', plantedAt: 0, readyAt: 0, eaten: 0 },
     )
     BOWLS.forEach((b, id) => this.foods.set(id, { id, kind: 'carrot', x: b.x, z: b.z, bites: 12, landAt: 0, landed: true, bowl: true, tree: null, by: null }))
     HOPPERS.forEach((h, i) => {
@@ -559,6 +576,9 @@ export class Farm {
       follow: null,
       raid: null,
       munchFrom: 0,
+      ateAt: 0,
+      play: 0,
+      playing: false,
       path: [],
       pathFor: null,
       pathAt: 0,
@@ -679,8 +699,10 @@ export class Farm {
         const bed = this.beds[msg.bed]
         const room = basketMax(this.upgrades) - this.basketCount(f)
         if (bed.stage !== 'ripe' || room <= 0 || !this.bedOpen(msg.bed) || !this.nearBed(f, msg.bed)) return
-        const picked = Math.min(harvestYield(this.upgrades, BEDS[msg.bed].square), room)
+        // Less whatever a sneaky pig ate off it.
+        const picked = Math.min(Math.max(1, harvestYield(this.upgrades, BEDS[msg.bed].square) - bed.eaten), room)
         f.basket[VEGGIES.indexOf(BEDS[msg.bed].kind)] += picked
+        bed.eaten = 0
         bed.stage = autoReplant(this.upgrades, BEDS[msg.bed].square) ? 'growing' : 'empty'
         if (bed.stage === 'growing') {
           bed.plantedAt = this.t
@@ -1449,12 +1471,14 @@ export class Farm {
     }
     // Everyone likes to hang out with their best friend.
     const friend = this.buddy(p, p.friend)
-    // Sneaky ones squeeze into a veg patch for a munch, when nobody's looking.
+    // Sneaky ones sneak into a veg patch (by the gate) for a munch, when nobody's looking.
     // (Even from the barn, if the door's open: they know the way.)
     if (!(inside && this.doorShut) && !this.evening && !this.raining && p.hunger < FULL && isSneaky(p.id) && this.rand() < RAID_CHANCE) {
       const bed = this.raidTarget(p)
       if (bed !== null && this.startRaid(p, bed)) return
     }
+    // Full and happy: off to play in the hut meadow (a scurry through a tunnel, or a game of hide in a hut).
+    if (!(inside && this.doorShut) && !this.evening && !this.raining && p.hunger >= PLAY_FULL && p.happy >= PLAY_HAPPY && this.rand() < PLAY_CHANCE && this.startPlay(p)) return
     if (friend && dist(p, friend) > 2.5 && this.rand() < FRIEND_SEEK) return this.walk(p, this.beside(p, friend), 'wander')
     // Together: often just stay there, side by side, nibbling or sitting.
     if (friend && dist(p, friend) <= 2.5 && this.rand() < FRIEND_STAY) return this.setState(p, !inside && this.rand() < 0.5 ? 'graze' : 'idle', this.between(3000, 7000))
@@ -1473,11 +1497,85 @@ export class Farm {
     this.setState(p, 'idle', this.between(1500, 5000))
   }
 
-  /** The nearest growing bed a sneaky pig could raid: in a patch the farm has, nobody else in it, no farmer about. */
+  /** Off to play: a tunnel (more often) or a hut to hide in, near enough. False if there's nowhere to play. */
+  private startPlay(p: Pig): boolean {
+    const tubes = tunnels()
+      .map((t, i) => ({ i, at: t.a, t }))
+      .filter((x) => dist(p, x.at) < PLAY_RANGE)
+    const huts = hideys()
+      .map((h, i) => ({ i, h }))
+      .filter((x) => x.h.square === 'huts' && dist(p, x.h) < PLAY_RANGE)
+    if (tubes.length && (this.rand() < 0.7 || !huts.length)) {
+      const { i, t } = this.pick(tubes)
+      // In at the nearer end.
+      const end = dist(p, t.a) <= dist(p, t.b) ? 0 : 1
+      this.walk(p, tunnelMouth(t, end), 'tunnel')
+      p.play = i * 2 + end
+      p.playing = false
+      return true
+    }
+    if (!huts.length) return false
+    const { i, h } = this.pick(huts)
+    const a = p.id * 2.4
+    this.walk(p, { x: h.x + Math.cos(a) * 0.25, z: h.z + Math.sin(a) * 0.15 }, 'peek')
+    p.play = i
+    p.playing = false
+    return true
+  }
+
+  /** Playing: to the tunnel and through it (maybe back again), or into the hut and hiding a while. */
+  private playing(p: Pig, dt: number) {
+    if (p.state === 'peek') {
+      if (!p.playing) {
+        if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt)) return
+        p.playing = true
+        p.until = this.t + this.between(...PEEK_MS)
+        return
+      }
+      p.happy = Math.min(100, p.happy + PEEK_HAPPY * dt)
+      if (this.t >= p.until) this.decide(p)
+      return
+    }
+    const t = tunnels()[p.play >> 1]
+    if (!t) return this.decide(p)
+    const end = (p.play & 1) as 0 | 1
+    if (!p.playing) {
+      if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt, 0.1)) return
+      // At the mouth: in we go, out the other end.
+      p.playing = true
+      const out = tunnelMouth(t, end === 0 ? 1 : 0)
+      p.tx = out.x
+      p.tz = out.z
+      p.path = []
+      p.pathFor = null
+      return
+    }
+    // Straight through (no need to find a way: it's a tube).
+    if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_SCURRY * this.pace(p, 'walk'), dt, 0.2, true)) return
+    p.happy = Math.min(100, p.happy + TUNNEL_HAPPY)
+    // Again! Back the way it came, now and then.
+    if (this.rand() < 0.35) {
+      p.play = (p.play & ~1) | (end === 0 ? 1 : 0)
+      const back = tunnelMouth(t, end === 0 ? 0 : 1)
+      p.tx = back.x
+      p.tz = back.z
+      return
+    }
+    if (this.rand() < 0.5) return this.setState(p, 'popcorn', 1600)
+    this.decide(p)
+  }
+
+  /** A bed worth raiding: growing, or ripe with something left to eat. */
+  private raidable(i: number) {
+    const bed = this.beds[i]
+    return bed.stage === 'growing' || (bed.stage === 'ripe' && bed.eaten < harvestYield(this.upgrades, BEDS[i].square) - 1)
+  }
+
+  /** The nearest growing or ripe bed a sneaky pig could raid: in a patch the farm has, nobody else in it, no farmer about. */
   private raidTarget(p: Pig): number | null {
     let best: number | null = null
     BEDS.forEach((bed, i) => {
-      if (!this.bedOpen(i) || this.beds[i].stage !== 'growing' || dist(p, bed) > RAID_RANGE) return
+      if (!this.bedOpen(i) || !this.raidable(i) || dist(p, bed) > RAID_RANGE) return
       if (this.pigs.some((q) => q.raid === i)) return
       if ([...this.farmers.values()].some((f) => dist(f, bed) < RAID_SPOOK + 4)) return
       if (best === null || dist(p, bed) < dist(p, BEDS[best])) best = i
@@ -1508,15 +1606,27 @@ export class Farm {
       return
     }
     const caught = [...this.farmers.values()].find((f) => dist(f, p) < RAID_SPOOK)
-    if (caught || this.evening || this.raining || this.t >= p.until || p.hunger >= FULL || this.beds[p.raid].stage !== 'growing') return this.leaveRaid(p, caught)
-    // Round the barn, trees and all (moveTo finds the way), then in under the fence to the bed.
+    if (caught || this.evening || this.raining || this.t >= p.until || p.hunger >= FULL || !this.raidable(p.raid)) return this.leaveRaid(p, caught)
+    // Round the barn, trees and all (moveTo finds the way), then in by the gate to the bed.
     if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt, 0.25)) return
     const bed = BEDS[p.raid]
     if (!p.munchFrom) {
       p.munchFrom = this.t
       p.until = this.t + this.between(...RAID_MS)
       // Only now it's in there, for everyone to see.
-      this.alert('fun', `🤫 ${p.name} has sneaked into the veg patch! (the ${bed.kind}s won't grow while they're munching)`)
+      this.alert(
+        'fun',
+        this.beds[p.raid].stage === 'ripe'
+          ? `🤫 ${p.name} has sneaked into the veg patch and is eating the ripe ${bed.kind}s!`
+          : `🤫 ${p.name} has sneaked into the veg patch! (the ${bed.kind}s won't grow while they're munching)`,
+      )
+      p.ateAt = this.t
+    }
+    // A ripe bed gets eaten, a veg at a time.
+    const crop = this.beds[p.raid]
+    if (crop.stage === 'ripe' && this.t - p.ateAt >= RAID_EAT_MS) {
+      p.ateAt = this.t
+      crop.eaten++
     }
     p.yaw = yawTowards(p, bed)
     if (this.t >= p.nextBite) {
@@ -1526,27 +1636,23 @@ export class Farm {
     }
   }
 
-  /** Out of the patch by the nearest side (caught red-pawed, if a farmer came along). */
+  /**
+   * A raider, or any pig that's ended up inside a veg garden: the fence keeps it in, bar the gate (it has to walk out
+   * the way it came, not through the fence).
+   */
+  private inFence(p: Pig) {
+    return p.state === 'raid' || !!gardenAt(p)
+  }
+
+  /** Out of the patch by the gate (caught red-pawed, if a farmer came along). */
   private leaveRaid(p: Pig, caught?: Farmer) {
     const bed = p.raid === null ? null : BEDS[p.raid]
-    const g = GARDENS.find((x) => inRect(p, x, 0.3))
+    const g = gardenAt(p) ?? GARDENS.find((x) => inRect(p, x, 0.3))
     if (!g) {
       this.setState(p, 'idle', 500)
       return this.decide(p)
     }
-    const out = 0.9
-    const exits = [
-      { x: g.x0 - out, z: p.z, d: p.x - g.x0 },
-      { x: g.x1 + out, z: p.z, d: g.x1 - p.x },
-      { x: p.x, z: g.z0 - out, d: p.z - g.z0 },
-      { x: p.x, z: g.z1 + out, d: g.z1 - p.z },
-    ].filter((e) => pigCanStand(e, 0.3))
-    const exit = exits.sort((a, b) => a.d - b.d)[0]
-    if (!exit) {
-      settlePig(p, PIG_RADIUS)
-      return this.decide(p)
-    }
-    this.walk(p, exit, 'raid')
+    this.walk(p, { x: g.gate.x + g.out.x * 1.2, z: g.gate.z + g.out.z * 1.2 }, 'raid')
     p.raid = null
     if (caught && bed) this.alert('fun', `🥬 Caught! ${caught.name} found ${p.name} munching the ${bed.kind}s. Off you pop!`)
   }
@@ -1612,7 +1718,7 @@ export class Farm {
    * barn walls, garden fences and the rest (worked out once, and again if the goal moves or the pig gets pushed off it).
    */
   private route(p: Pig, leg: P): P {
-    const raid = p.state === 'raid'
+    const raid = this.inFence(p)
     const extra = this.doorShut ? [DOOR_GATE] : []
     if (!pigLineBlocked(p, leg, PIG_RADIUS, raid, extra)) {
       p.path = []
@@ -1631,7 +1737,7 @@ export class Farm {
   }
 
   /** Walks towards a point (through the door if need be). True once there. */
-  private moveTo(p: Pig, to: P, speed: number, dt: number, near = 0.15): boolean {
+  private moveTo(p: Pig, to: P, speed: number, dt: number, near = 0.15, straight = false): boolean {
     // In a train: head for the spot just behind the leader instead (it never counts as arriving).
     const leader = p.state === 'raid' ? null : this.leader(p, to)
     p.follow = leader?.id ?? null
@@ -1639,7 +1745,7 @@ export class Farm {
     const goal = behind ?? to
     let step = nextStep(p, goal, (((p.id * 0.618) % 1) - 0.5) * 2)
     // Round walls and fences rather than into them (in a train, the leader's doing that)…
-    if (!behind) step = this.route(p, step)
+    if (!behind && !straight) step = this.route(p, step)
     // …and round the hidey huts, into them only by the front.
     step = hutStep(p, step, PIG_RADIUS)
     const final = !behind && step === to
@@ -1653,7 +1759,7 @@ export class Farm {
       p.z += (dz / d) * move
       p.yaw = yawTowards({ x: 0, z: 0 }, { x: dx, z: dz })
     }
-    if (p.state === 'raid') settleRaider(p, PIG_RADIUS)
+    if (this.inFence(p)) settleRaider(p, PIG_RADIUS)
     else settlePig(p, PIG_RADIUS)
     if (this.doorShut) pushOut(p, PIG_RADIUS, [DOOR_GATE])
     // Walking into a wall for a while: give up and think again.
@@ -1781,6 +1887,9 @@ export class Farm {
     switch (p.state) {
       case 'raid':
         return this.raiding(p, dt)
+      case 'tunnel':
+      case 'peek':
+        return this.playing(p, dt)
       case 'seek': {
         const food = p.food === null ? undefined : this.foods.get(p.food)
         if (!food || food.bites <= 0) return this.afterMeal(p)
@@ -1860,7 +1969,7 @@ export class Farm {
         b.z += nz * push * wb
       }
     }
-    for (const p of here) if (p.state === 'raid') settleRaider(p, PIG_RADIUS)
+    for (const p of here) if (this.inFence(p)) settleRaider(p, PIG_RADIUS)
     else if (!SETTLED.includes(p.state)) settlePig(p, PIG_RADIUS)
   }
 
@@ -2314,9 +2423,10 @@ export class Farm {
       farmers,
       pigs,
       foods: ground.map((f) => ({ id: f.id, kind: f.kind, x: r2(f.x), z: r2(f.z), bites: f.bites })),
-      beds: this.beds.map((b) => ({
+      beds: this.beds.map((b, i) => ({
         stage: b.stage,
         grow: b.stage === 'growing' ? r2(Math.min(1, (this.t - b.plantedAt) / Math.max(1, b.readyAt - b.plantedAt))) : b.stage === 'ripe' ? 1 : 0,
+        ...(b.stage === 'ripe' && b.eaten ? { left: r2(1 - b.eaten / harvestYield(this.upgrades, BEDS[i].square)) } : {}),
       })),
       bowls: BOWLS.map((_, i) => {
         const bowl = this.foods.get(i)!
@@ -2375,7 +2485,7 @@ export class Farm {
         issues: p.issues,
         ...(p.due !== undefined ? { care: [r2(p.careGood), r2(p.careTotal)] as [number, number] } : {}),
       })),
-      beds: this.beds.map((b) => ({ stage: b.stage, left: Math.max(0, b.readyAt - this.t) })),
+      beds: this.beds.map((b) => ({ stage: b.stage, left: Math.max(0, b.readyAt - this.t), ...(b.eaten ? { eaten: b.eaten } : {}) })),
       bowls: BOWLS.map((_, i) => this.foods.get(i)!.bites),
       hoppers: HOPPERS.map((_, i) => this.foods.get(HOPPER_ID + i)!.bites),
       sacks: this.sacks,
@@ -2426,6 +2536,7 @@ export class Farm {
         stage: b.stage === 'ripe' || b.stage === 'growing' ? b.stage : 'empty',
         plantedAt: this.t - (growMs(this.upgrades, bed.square) - (num(b.left) ? b.left : 0)),
         readyAt: this.t + (num(b.left) ? b.left : 0),
+        eaten: b.stage === 'ripe' && num(b.eaten) ? Math.max(0, Math.min(harvestYield(this.upgrades, bed.square) - 1, Math.round(b.eaten!))) : 0,
       }
     })
     s.bowls.forEach((bites, i) => {

@@ -430,13 +430,18 @@ describe('the farm over time', () => {
     ownAll(farm)
     farm.join('Ann', 0)
     farm.nextFoxAt = farm.t + 5000
+    const penned = new Map<number, number>()
     for (let i = 0; i < (4 * 60_000) / TICK_MS; i++) {
       farm.tick(TICK_MS)
       for (const p of farm.pigs) {
         if (p.state === 'lost' || p.state === 'carried' || p.state === 'held') continue
-        // Sneaky pigs raiding a veg patch are allowed inside its fence.
-        const ok = p.state === 'raid' ? onFarm(p) && gardens().some((g) => inRect(p, g, 0.5)) || pigCanStand(p, -0.05) : pigCanStand(p, -0.05)
+        // Sneaky pigs raiding a veg patch (or on their way back out by the gate) are allowed inside its fence…
+        const inGarden = onFarm(p) && gardens().some((g) => inRect(p, g, 0.5))
+        const ok = inGarden || pigCanStand(p, -0.05)
         if (!ok) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
+        // …but not shut in there.
+        penned.set(p.id, inGarden && p.state !== 'raid' ? (penned.get(p.id) ?? 0) + TICK_MS : 0)
+        if (penned.get(p.id)! > 30_000) throw new Error(`${p.name} is shut in a veg patch at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
       }
     }
   })
@@ -445,13 +450,18 @@ describe('the farm over time', () => {
     const farm = new Farm(seeded(7))
     farm.join('Ann', 0)
     farm.nextFoxAt = farm.t + 5000
+    const penned = new Map<number, number>()
     for (let i = 0; i < (5 * 60_000) / TICK_MS; i++) {
       farm.tick(TICK_MS)
       for (const p of farm.pigs) {
         if (p.state === 'lost' || p.state === 'carried' || p.state === 'held') continue
-        // Sneaky pigs raiding a veg patch are allowed inside its fence.
-        const ok = p.state === 'raid' ? onFarm(p) && gardens().some((g) => inRect(p, g, 0.5)) || pigCanStand(p, -0.05) : pigCanStand(p, -0.05)
+        // Sneaky pigs raiding a veg patch (or on their way back out by the gate) are allowed inside its fence…
+        const inGarden = onFarm(p) && gardens().some((g) => inRect(p, g, 0.5))
+        const ok = inGarden || pigCanStand(p, -0.05)
         if (!ok) throw new Error(`${p.name} is stuck at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
+        // …but not shut in there.
+        penned.set(p.id, inGarden && p.state !== 'raid' ? (penned.get(p.id) ?? 0) + TICK_MS : 0)
+        if (penned.get(p.id)! > 30_000) throw new Error(`${p.name} is shut in a veg patch at ${p.x.toFixed(2)},${p.z.toFixed(2)} (${p.state})`)
       }
     }
   })

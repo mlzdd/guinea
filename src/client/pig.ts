@@ -394,6 +394,15 @@ export class PigModel {
         feet.forEach((f, i) => (f.position.y = 0.022 + Math.sin(tt * 18 + i) * 0.03))
         roll = Math.sin(tt * (state === 'carried' ? 20 : 3)) * (state === 'carried' ? 0.25 : 0.05)
         break
+      case 'peek':
+        // Hiding for fun: snug in a loaf, peeking this way and that, nose going.
+        if (moving > 0.2) break
+        squash = 0.94
+        feetIn = true
+        eyesOpen = 1.1
+        sniff = 30
+        twist = Math.sin(tt * 1.3) * 0.35
+        break
       case 'hide':
         // Frozen stock still: eyes wide, ears up, not even a twitch of the nose.
         squash = 0.95

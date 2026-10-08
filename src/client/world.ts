@@ -17,6 +17,9 @@ import {
   HAY_RACKS,
   rackBuilt,
   HIDEYS,
+  TUNNELS,
+  TUNNEL_R,
+  type Tunnel,
   HIDEY_D,
   HIDEY_H,
   HIDEY_W,
@@ -433,6 +436,7 @@ export class World {
     this.buildGarden()
     this.buildOrchard()
     for (const h of HIDEYS) this.into(h).add(this.hidey(h.x, h.z))
+    for (const t of TUNNELS) this.content[t.square].add(this.tunnel(t))
     this.buildMeadow()
     this.buildStackYard()
     this.buildPond()
@@ -862,6 +866,41 @@ export class World {
   }
 
   /** A wooden A-frame hut, open to the south, for pigs to dive into. */
+  /** A crinkly fabric play tunnel: a stripy open tube half sunk in the grass, with a hoop at each end. */
+  private tunnel(t: Tunnel) {
+    const g = new THREE.Group()
+    const len = Math.hypot(t.b.x - t.a.x, t.b.z - t.a.z)
+    const R = TUNNEL_R + 0.08
+    const colours = [0xe8453c, 0x3c7ee8, 0xf2c230, 0x3cc45a, 0xb05ce0]
+    const colour = colours[TUNNELS.indexOf(t) % colours.length]
+    const stripes = canvasTexture(
+      64,
+      (c, s) => {
+        c.fillStyle = `#${colour.toString(16).padStart(6, '0')}`
+        c.fillRect(0, 0, s, s)
+        c.fillStyle = 'rgba(255,255,255,0.35)'
+        for (let y = 0; y < s; y += 16) c.fillRect(0, y, s, 5)
+      },
+      Math.max(1, Math.round(len * 2)),
+    )
+    stripes.wrapS = stripes.wrapT = THREE.RepeatWrapping
+    stripes.repeat.set(1, Math.round(len * 2))
+    const tube = shadowed(
+      new THREE.Mesh(new THREE.CylinderGeometry(R, R, len, 20, 1, true), new THREE.MeshLambertMaterial({ map: stripes, side: THREE.DoubleSide })),
+    )
+    tube.rotation.x = Math.PI / 2 // lying down, along z…
+    g.add(tube)
+    for (const end of [-1, 1]) {
+      const hoop = shadowed(new THREE.Mesh(new THREE.TorusGeometry(R, 0.05, 8, 24), mat(0xffffff)))
+      hoop.position.z = (end * len) / 2
+      g.add(hoop)
+    }
+    g.position.set((t.a.x + t.b.x) / 2, R - 0.06, (t.a.z + t.b.z) / 2)
+    // …then turned to run along x if that's the way it goes.
+    if (t.a.z === t.b.z) g.rotation.y = Math.PI / 2
+    return g
+  }
+
   private hidey(x: number, z: number) {
     const g = new THREE.Group()
     const wood = new THREE.MeshLambertMaterial({ map: plankTex })
@@ -1179,7 +1218,9 @@ export class World {
         p.visible = grow > 0
         p.scale.setScalar(Math.max(0.01, grow))
       }
-      for (const r of view.ripe) r.visible = b.stage === 'ripe'
+      // A ripe bed a sneaky pig's been munching has gaps in it.
+      const left = Math.ceil(view.ripe.length * (b.left ?? 1))
+      view.ripe.forEach((r, k) => (r.visible = b.stage === 'ripe' && k < left))
     })
   }
 

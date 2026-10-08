@@ -22,6 +22,10 @@ export type PigState =
   | 'scoot'
   /** Sneaked into a veg patch: squeezing in, munching a bed (it stops growing), or squeezing back out. */
   | 'raid'
+  /** Playing in the hut meadow: off to a tunnel and scurrying through it… */
+  | 'tunnel'
+  /** …or hiding in a hidey hut for fun (not scared), peeking out. */
+  | 'peek'
   | 'scratch'
   | 'sneeze'
   | 'held'
@@ -75,6 +79,8 @@ export interface BedSnap {
   stage: 'empty' | 'growing' | 'ripe'
   /** 0..1 while growing. */
   grow: number
+  /** Ripe: how much of the crop is left (1 = all of it, less once a sneaky pig's been at it). */
+  left?: number
 }
 
 export interface PredSnap {

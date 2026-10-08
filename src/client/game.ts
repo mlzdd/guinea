@@ -820,6 +820,10 @@ export class Game {
           return say(pickOne(MONCH), 'monch', 1.2)
         case 'raid':
           return say(pickOne(['shh… 🤫', 'nobody look…', '🤫']), 'plain', 3)
+        case 'tunnel':
+          return say(pickOne(['tunnel time!', 'wheee!', 'race you!']), 'love', 2.5)
+        case 'peek':
+          return say(pickOne(['hide and seek!', 'can’t see me!', 'hee hee']), 'love', 3)
         case 'flee':
           return say(pickOne(['EEK!', 'EEEK!', 'eek eek!']), 'eek', 1.5)
         case 'carried':
@@ -852,6 +856,10 @@ export class Game {
     switch (s) {
       case 'raid':
         return say(pickOne(['nom nom 🤫', 'munch munch', 'shh… nom']), 'monch', 2.5)
+      case 'tunnel':
+        return say(pickOne(['wheee!', 'zoom!', 'whoosh!']), 'love', 2.5)
+      case 'peek':
+        return say(pickOne(['👀', 'peekaboo!', 'hee hee']), 'love', 4)
       case 'eat':
         return say(pickOne(MONCH), 'monch', 1.3)
       case 'seek':
@@ -1059,7 +1067,7 @@ export class Game {
         const stage = snap.beds[i].stage
         const name = `${VEG_ICON[b.kind]} ${VEG_LABEL[b.kind].toLowerCase()}s`
         if (stage === 'ripe')
-          offer(used >= max ? { label: 'Basket full!', msg: null, d } : { label: `Harvest ${name}`, msg: { t: 'harvest', bed: i }, d })
+          offer(used >= max ? { label: 'Basket full!', msg: null, d } : { label: `Harvest ${name}${snap.beds[i].left !== undefined ? ' (a sneaky piggy’s been at them! 🐹)' : ''}`, msg: { t: 'harvest', bed: i }, d })
         else if (stage === 'empty') offer({ label: `Plant ${name}`, msg: { t: 'plant', bed: i }, d })
         else offer({ label: `${name} growing… ${Math.round(snap.beds[i].grow * 100)}%`, msg: null, d })
       })

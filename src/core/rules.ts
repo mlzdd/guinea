@@ -141,9 +141,9 @@ export const SNACK_TRIP = 0.3
 export const FRIEND_SEEK = 0.55
 export const FRIEND_STAY = 0.35
 /**
- * Sneaky piggies (nearly half of them, `isSneaky`) sometimes squeeze under a veg patch fence when they're peckish
- * (RAID_CHANCE each time they pick what to do by day) and munch away at a growing bed with no farmer near it. It fills
- * them up, but the bed doesn't grow while they're in it. They squeeze back out when full, after RAID_MS, at dusk, or
+ * Sneaky piggies (nearly half of them, `isSneaky`) sometimes sneak in through a veg patch's gate when they're peckish
+ * (RAID_CHANCE each time they pick what to do by day) and munch away at a growing or ripe bed with no farmer near it. It
+ * fills them up, but a growing bed doesn't grow while they're in it, and a ripe one gets eaten (RAID_EAT_MS). They sneak back out by the gate when full, after RAID_MS, at dusk, or
  * when a farmer comes within RAID_SPOOK.
  */
 export const SNEAKY = 0.45
@@ -153,6 +153,20 @@ export const RAID_CHANCE = 0.5
 export const RAID_RANGE = 50
 export const RAID_MS: [number, number] = [20_000, 40_000]
 export const RAID_SPOOK = 3
+/**
+ * Play in the hut meadow: a happy pig with a nearly full tummy (PLAY_FULL+, PLAY_HAPPY+) sometimes (PLAY_CHANCE) trots
+ * over for a scurry through a play tunnel (TUNNEL_HAPPY each run, and maybe another one back), or a game of hide in a
+ * hidey hut (PEEK_HAPPY a second for PEEK_MS). Only by day, with no rain, from within PLAY_RANGE.
+ */
+export const PLAY_FULL = 85
+export const PLAY_HAPPY = 40
+export const PLAY_CHANCE = 0.3
+export const PLAY_RANGE = 35
+export const TUNNEL_HAPPY = 6
+export const PEEK_HAPPY = 1.2
+export const PEEK_MS: [number, number] = [5000, 10_000]
+/** A raider munching a ripe bed eats one veg of its harvest this often (it always leaves at least one). */
+export const RAID_EAT_MS = 6000
 /**
  * Poorly piggies (hungry, glum, or with something wrong, even the hidden nails and teeth) go slow and mope about in
  * corners, so you can tell who needs looking after.
@@ -241,7 +255,7 @@ export const LAND = {
   garden: { icon: '🥬', name: 'Veg patch', cost: 40, desc: '4 more veg beds behind a fence' },
   meadow: { icon: '🌾', name: 'Hay meadow', cost: 50, desc: 'Hay! Unlimited hay for the racks in the barn (pellets are rationed). Hay keeps teeth healthy. Lush grass and a hidey hut too' },
   orchard: { icon: '🍎', name: 'Orchard', cost: 60, desc: 'Apple trees: apples drop for the piggies and your basket' },
-  huts: { icon: '🛖', name: 'Hut meadow', cost: 60, desc: 'Three hidey huts to dive into when a fox or hawk comes' },
+  huts: { icon: '🛖', name: 'Hut meadow', cost: 60, desc: 'Three hidey huts to dive into when a fox or hawk comes, and play tunnels: full, happy piggies love a scurry through and a game of hide' },
   flowers: { icon: '🌼', name: 'Wild flowers', cost: 70, desc: 'Nibbling dandelions and clover cheers piggies right up' },
   patch2: { icon: '🥕', name: 'Veg patch 2', cost: 80, desc: '3 more veg beds' },
   pond: { icon: '🦆', name: 'Pond', cost: 80, desc: 'A calm spot: piggies resting by the water get happier' },
