@@ -6,6 +6,7 @@ import { makePigLooks } from './core/pigs.ts'
 import type { ServerMsg } from './core/protocol.ts'
 import { FARMER_COLORS } from './core/rules.ts'
 import { startMusic } from './client/music.ts'
+import { FAST, setQuality, TOUCH } from './client/device.ts'
 import './style.css'
 
 const NAME_KEY = 'guinea.name'
@@ -21,6 +22,21 @@ const error = document.getElementById('error')!
 const note = document.getElementById('note')!
 const canvas = document.getElementById('view') as HTMLCanvasElement
 
+// Touch screens get the on-screen controls and the phone layout (and the help starts shut: it'd cover the farm).
+document.body.classList.toggle('touch', TOUCH)
+if (TOUCH) {
+  const help = document.getElementById('help')!
+  help.classList.remove('open')
+  // A tap on it shuts it (a drag scrolls it).
+  help.addEventListener('click', (e) => !(e.target as HTMLElement).closest('button') && help.classList.remove('open'))
+}
+// The graphics setting, in the help panel.
+document.querySelectorAll<HTMLButtonElement>('#help .gfx button').forEach((b) => {
+  const fast = b.dataset.q === 'fast'
+  b.classList.toggle('on', fast === FAST)
+  b.addEventListener('click', () => fast !== FAST && setQuality(fast))
+})
+
 let color = 0
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? ''
@@ -28,7 +44,8 @@ try {
 } catch {
   // Storage blocked: start with an empty name and the first colour.
 }
-nameInput.focus()
+// (Not on a phone: the keyboard would pop up over the lobby.)
+if (!TOUCH) nameInput.focus()
 
 // Overalls colour picker
 const swatches = document.getElementById('colors')!
@@ -40,7 +57,7 @@ FARMER_COLORS.forEach((c, i) => {
   b.addEventListener('click', () => {
     color = i
     swatches.querySelectorAll('button').forEach((x, j) => x.classList.toggle('on', j === i))
-    nameInput.focus()
+    if (!TOUCH) nameInput.focus()
   })
   swatches.append(b)
 })
@@ -146,6 +163,7 @@ async function enterFarm(msg: Extract<ServerMsg, { t: 'welcome' }>) {
   }
   stopPreview?.()
   stopPreview = null
+  document.body.classList.add('playing')
   document.getElementById('lobby')!.hidden = true
   loading.hidden = false
   progress(0.05, 'Opening the farm gate…')
@@ -183,6 +201,14 @@ function onClose() {
 
 void open()
 
+function fullScreen() {
+  const el = document.documentElement
+  if (document.fullscreenElement || !el.requestFullscreen) return
+  el.requestFullscreen({ navigationUI: 'hide' })
+    .then(() => (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.('landscape'))
+    .catch(() => {})
+}
+
 form.addEventListener('submit', (e) => {
   e.preventDefault()
   if (!net) {
@@ -198,6 +224,9 @@ form.addEventListener('submit', (e) => {
   }
   button.disabled = true
   error.textContent = ''
+  nameInput.blur()
+  // A phone goes full screen and sideways (where it can: not iPhones), during the tap so the browser allows it.
+  if (TOUCH) fullScreen()
   // Play during the join gesture so browsers can allow audible playback.
   startMusic()
   net.send({ t: 'join', name, color })

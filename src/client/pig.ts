@@ -5,6 +5,10 @@ import { coatFor, type CoatPart } from './fur.ts'
 import { drapedHair, rosetteSpots, rosettes, scruffyHair, whiskers } from './hair.ts'
 import { foldedOval, headShape, loaf, shapedSphere, surface, type Ellipsoid } from './shape.ts'
 import { mat } from './veg.ts'
+import { FAST } from './device.ts'
+
+/** Fast graphics (phones): far fewer of the fine scruffy hairs, a few fewer long ones. */
+const hair = (n: number) => (FAST ? Math.round(n * (n > 500 ? 0.35 : 0.7)) : n)
 
 const sphere = new THREE.SphereGeometry(1, 14, 10)
 const blob = new THREE.CircleGeometry(1, 16)
@@ -236,19 +240,19 @@ export class PigModel {
       // Rosettes (whorls of curly hair) over a scruffy coat of short straight hair going every which way.
       const spots = rosetteSpots(rand)
       b.add(rosettes(coat.body, BODY, rand, spots))
-      b.add(scruffyHair(coat.body, BODY, rand, { count: 6500, len: 0.08, radius: 0.0026, avoid: spots }))
-      h.add(scruffyHair(coat.head, HEAD, rand, { count: 1000, len: 0.045, radius: 0.0021, bare: face.bare, flat: true }))
+      b.add(scruffyHair(coat.body, BODY, rand, { count: hair(6500), len: 0.08, radius: 0.0026, avoid: spots }))
+      h.add(scruffyHair(coat.head, HEAD, rand, { count: hair(1000), len: 0.045, radius: 0.0021, bare: face.bare, flat: true }))
     } else if (look.breed === 'peruvian') {
       // Long flowing hair draped down to the ground, and parted on the head.
-      b.add(drapedHair(coat.body, BODY, 0.02, rand, { count: 320, zFrom: -0.8, zTo: 1.2, radius: 0.008, rear: 120 }))
-      h.add(drapedHair(coat.head, HEAD, -0.09, rand, { count: 80, zFrom: -0.25, zTo: 0.9, radius: 0.007 }))
+      b.add(drapedHair(coat.body, BODY, 0.02, rand, { count: hair(320), zFrom: -0.8, zTo: 1.2, radius: 0.008, rear: hair(120) }))
+      h.add(drapedHair(coat.head, HEAD, -0.09, rand, { count: hair(80), zFrom: -0.25, zTo: 0.9, radius: 0.007 }))
     } else if (look.breed === 'crested') {
       // One rosette in the middle of the forehead: white on a self-coloured pig (an American crested).
       const white = { paint: () => [0.97, 0.95, 0.9] as [number, number, number] }
       h.add(rosettes(look.pattern === 'self' ? white : coat.head, HEAD, rand, [dir(0, 0.8, -0.6)], 0.5))
     } else if (look.breed === 'skinny') {
       // Bare and wrinkly (fur.ts), with just a fuzzy nose.
-      h.add(scruffyHair(coat.head, HEAD, rand, { count: 220, len: 0.02, radius: 0.0016, flat: true, bare: face.bare, from: -0.6, where: (d) => d.z < -0.6 }))
+      h.add(scruffyHair(coat.head, HEAD, rand, { count: hair(220), len: 0.02, radius: 0.0016, flat: true, bare: face.bare, from: -0.6, where: (d) => d.z < -0.6 }))
     }
     this.baseScale = look.breed === 'teddy' ? new THREE.Vector3(1.08, 1.05, 1) : new THREE.Vector3(1, 1, 1)
 

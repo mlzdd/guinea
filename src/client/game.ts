@@ -42,6 +42,8 @@ import { Bubbles, type BubbleStyle } from './bubbles.ts'
 import { FarmerModel, FoxModel, HawkModel } from './critters.ts'
 import { Hud, mood } from './hud.ts'
 import { Input } from './input.ts'
+import { FAST, TOUCH } from './device.ts'
+import { TouchControls } from './touch.ts'
 import { setNight } from './music.ts'
 import type { Net } from './net.ts'
 import { PigModel } from './pig.ts'
@@ -67,6 +69,8 @@ const STRUT_RANGE = 1.4
 const STRUT_AT: PigState[] = ['idle', 'wander', 'graze']
 /** Emote keys, in EMOTES order, and how each bubble looks. */
 const EMOTE_KEYS = ['KeyZ', 'KeyX', 'KeyC', 'KeyV']
+/** What the action's called in hints: the key, or the button on a touch screen. */
+const ACT_KEY = TOUCH ? '✋' : 'E'
 const EMOTE_STYLE: BubbleStyle[] = ['plain', 'love', 'eek', 'wheek']
 
 const pickOne = <T>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)]
@@ -150,6 +154,8 @@ export class Game {
   private readonly bubbles: Bubbles
   private readonly hud = new Hud()
   private readonly input: Input
+  /** The on-screen buttons, on a touch screen. */
+  private readonly touch: TouchControls | null = null
   private net!: Net
   private myId = -1
   private looks: PigLook[] = []
@@ -157,7 +163,8 @@ export class Game {
   private readonly me = { x: 0, y: 0, z: -5, vx: 0, vy: 0, vz: 0, yaw: 0, speed: 0, model: null as FarmerModel | null }
   private jumpQueued = false
   private readonly camYaw = 0 // the camera never turns
-  private camDist = 22
+  /** How far the camera sits back (the wheel or a pinch changes it): a bit closer on a phone's small screen. */
+  private camDist = TOUCH ? 16 : 22
   private readonly camTarget = new THREE.Vector3()
 
   private pigs: PigView[] = []
@@ -185,10 +192,11 @@ export class Game {
   private readonly ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+    // Fast graphics (phones): no antialiasing, fewer pixels, plain shadows.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !FAST, powerPreference: 'high-performance' })
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, FAST ? 1.5 : 2))
     this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.type = FAST ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap
     this.bubbles = new Bubbles(this.world.scene)
     this.hall = new ShowHall(this.world.scene)
     this.input = new Input(canvas)
@@ -198,8 +206,18 @@ export class Game {
       if (this.action?.msg) this.act()
       else this.throwVeg()
     }
+    // A tap on a touch screen throws there (the action has its own button, and the prompt can be tapped).
+    this.input.onTap = () => {
+      if (this.snap?.paused || !this.me.model) return
+      // Hands full or nothing to throw: a stray tap does nothing (no telling off).
+      if (this.holding() !== null || this.hasSack() || this.mySnap()?.platter) return
+      if (!this.basket().some((n) => n > 0) && this.hayArmfuls() <= 0) return
+      this.updateAim(this.holding())
+      this.throwVeg()
+    }
     this.hud.onSlot = (i) => this.slot(i)
     this.input.onKey = (code) => this.key(code)
+    if (TOUCH) this.touch = new TouchControls((code) => this.input.press(code))
 
     this.cursor = new THREE.Mesh(
       new THREE.RingGeometry(0.3, 0.42, 24),
@@ -598,15 +616,15 @@ export class Game {
   private throwVeg(at: { x: number; z: number } = this.aim) {
     if (!this.snap || this.clock - this.lastThrow < THROW_COOLDOWN) return
     if (this.holding() !== null) {
-      this.hud.toast('Put the piggy down first (E)')
+      this.hud.toast(`Put the piggy down first (${ACT_KEY})`)
       return
     }
     if (this.hasSack()) {
-      this.hud.toast('Pour that sack into a hopper first (E)')
+      this.hud.toast(`Pour that sack into a hopper first (${ACT_KEY})`)
       return
     }
     if (this.mySnap()?.platter) {
-      this.hud.toast('Hands full: put the salad platter down in the middle of the barn first (E)')
+      this.hud.toast(`Hands full: put the salad platter down in the middle of the barn first (${ACT_KEY})`)
       return
     }
     if (this.selected === HAY_SLOT) {
@@ -673,7 +691,7 @@ export class Game {
     const dx = right.x * mv.x + fwd.x * mv.y
     const dz = right.z * mv.x + fwd.z * mv.y
     const len = Math.hypot(dx, dz)
-    const run = this.input.down('ShiftLeft', 'ShiftRight') && holding === null
+    const run = this.input.running() && holding === null
     const speed = len > 0 ? ((run ? RUN_SPEED : WALK_SPEED) * farmerSpeed(this.snap.upgrades)) / len : 0
 
     // Momentum, jumping and falling: anything lower than your feet doesn't get in the way, and you land on whatever's under you.
@@ -1171,6 +1189,7 @@ export class Game {
       }
     }
     this.hud.setPrompt(lines.join('<br>') || null)
+    this.touch?.set(!!a?.msg, lines.length > (a ? 1 : 0))
   }
 
   /** What there is to do in the show car or at the show: the judging table, then back to your spot. */

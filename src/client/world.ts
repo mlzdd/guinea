@@ -42,6 +42,7 @@ import {
 import type { BedSnap } from '../core/protocol.ts'
 import { BALE_ARMFULS, BOWL_MAX, hayRackMax, hayStackMax, LAND_UPGRADES, UPGRADES, landLevel, LAND, NIGHT_START, level, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
+import { FAST } from './device.ts'
 
 const WALL_H = 2.6
 
@@ -408,7 +409,7 @@ export class World {
     s.add(this.hemi)
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.4)
     this.sun.castShadow = true
-    this.sun.shadow.mapSize.set(2048, 2048)
+    this.sun.shadow.mapSize.setScalar(FAST ? 1024 : 2048)
     const sc = this.sun.shadow.camera
     sc.left = -40
     sc.right = 40

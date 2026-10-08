@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#6fb04a" />
     <title>Guinea Orchard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -52,7 +55,7 @@
       <div id="diary" hidden></div>
       <div id="help" class="open">
         <h2>How To Play <kbd>H</kbd></h2>
-        <table>
+        <table class="keys">
           <tr><td>WASD</td><td>walk · <b>Shift</b> run · <b>Space</b> jump (fences, huts)</td></tr>
           <tr><td>E / click</td><td>do what the prompt says (harvest, hay, pick up a piggy…)</td></tr>
           <tr><td>Click</td><td>throw veg where you point</td></tr>
@@ -61,6 +64,15 @@
           <tr><td>Z X C V</td><td>👋 ❤️ help! 😂</td></tr>
           <tr><td>B · L · P</td><td>shop · diary · pause (for everyone)</td></tr>
           <tr><td>Wheel</td><td>zoom</td></tr>
+        </table>
+        <table class="taps">
+          <tr><td>🕹️ Stick</td><td>bottom left: walk (push right out to run); or put your thumb anywhere on the left</td></tr>
+          <tr><td>✋</td><td>do what the prompt says (or tap the prompt)</td></tr>
+          <tr><td>Tap</td><td>throw veg there · tap a basket slot to pick a veg, again to drop one</td></tr>
+          <tr><td>📣 ⤴️ 😀</td><td>SHOO! foxes and hawks · jump · emotes</td></tr>
+          <tr><td>Hold</td><td>on a piggy: who it is and how it's doing</td></tr>
+          <tr><td>Pinch</td><td>zoom</td></tr>
+          <tr><td>🛒 📖 ⏸️ 📋</td><td>shop · diary · pause (for everyone) · farmers and jobs</td></tr>
         </table>
         <ul>
           <li>🥕 Throw veg and hungry piggies come running. Replant beds after harvest; 🍎 apples fall in the orchard.</li>
@@ -75,8 +87,11 @@
           <li>🏆 Show day: carry your best-kept piggy to the show car, put it on the judging table, then back to your spot for the results.</li>
           <li>🪙 Happy piggies earn coins each morning. 🤤 Cravings and 📋 jobs pay extra. Spend it on upgrades and 🗺️ land (B).</li>
         </ul>
+        <p class="gfx">Graphics: <button type="button" data-q="nice">✨ Nice</button> <button type="button" data-q="fast">⚡ Fast</button></p>
       </div>
     </div>
+
+    <div id="rotate"><div class="phone">📱</div><p>Turn your phone sideways to farm</p></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

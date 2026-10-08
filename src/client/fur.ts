@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COLORS, type PigLook } from '../core/pigs.ts'
+import { FAST } from './device.ts'
 
 /**
  * A pig's coat painted onto its body and head spheres: the markings (soft-edged patches, a dutch
@@ -11,7 +12,10 @@ import { COLORS, type PigLook } from '../core/pigs.ts'
  */
 
 /** Fur shells per part, as [scale, alphaTest]: the outer shell has fewer, sparser tips. */
-const SHELLS: Record<'fuzz' | 'short' | 'long', [number, number][]> = {
+const SHELLS: Record<'fuzz' | 'short' | 'long', [number, number][]> = FAST
+  ? // Fast graphics (phones): fewer, thicker shells.
+    { fuzz: [[1.012, 0.8]], short: [[1.06, 0.4], [1.12, 0.68]], long: [[1.1, 0.32], [1.22, 0.7]] }
+  : {
   /** A skinny pig's peach fuzz. */
   fuzz: [[1.012, 0.8]],
   short: [

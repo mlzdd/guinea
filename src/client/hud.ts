@@ -27,6 +27,8 @@ import { CATEGORIES, CATEGORY_LABEL, total, type Scores } from '../core/show.ts'
 
 const $ = (id: string) => document.getElementById(id)!
 const css = (c: number) => `#${c.toString(16).padStart(6, '0')}`
+/** The close button on the shop and the diary. */
+const CLOSE = '<button class="x" type="button" aria-label="Close">✕</button>'
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 type Check = 'weigh' | Issue
@@ -120,6 +122,9 @@ export class Hud {
   }
 
   constructor() {
+    // The ✕ on the shop and the diary.
+    $('shop').addEventListener('click', (e) => (e.target as HTMLElement).closest('.x') && this.toggleShop(false))
+    $('diary').addEventListener('click', (e) => (e.target as HTMLElement).closest('.x') && this.toggleDiary(false))
     $('basket').addEventListener('pointerdown', (e) => {
       const slot = (e.target as HTMLElement).closest<HTMLElement>('.slot')
       if (!slot) return
@@ -144,7 +149,7 @@ export class Hud {
     el.hidden = !by
     if (by && el.dataset.by !== by) {
       el.dataset.by = by
-      el.innerHTML = `<div class="big">⏸️ Paused</div><div class="sub"></div><div class="hint">Press <kbd>P</kbd> to carry on</div>`
+      el.innerHTML = `<div class="big">⏸️ Paused</div><div class="sub"></div><div class="hint"><span class="keys">Press <kbd>P</kbd></span><span class="taps">Tap ⏸️</span> to carry on</div>`
       el.querySelector('.sub')!.textContent = `by ${by}: the piggies are waiting`
     }
     if (!by) delete el.dataset.by
@@ -213,7 +218,7 @@ export class Hud {
 
   toggleDiary(open = !this.diaryOpen) {
     $('diary').hidden = !open
-    if (open) $('diary').innerHTML = '<h3>Farm diary</h3><p class="hint">Opening the diary…</p>'
+    if (open) $('diary').innerHTML = `${CLOSE}<h3>Farm diary</h3><p class="hint">Opening the diary…</p>`
   }
 
   showDiary(rows: DiaryRow[], myName: string) {
@@ -224,7 +229,7 @@ export class Hud {
       const top = sorted.reduce<DiaryRow | null>((best, r) => (w.score(r) > (best ? w.score(best) : 0) ? r : best), null)
       return top ? `<li>${w.icon} <b>${w.title}:</b> ${esc(top.name)} <small>(${w.score(top)})</small></li>` : ''
     }).join('')
-    $('diary').innerHTML = `
+    $('diary').innerHTML = `${CLOSE}
       <h3>Farm diary</h3>
       ${awards ? `<ul class="awards">${awards}</ul>` : '<p class="hint">Nothing written yet: go and feed some piggies!</p>'}
       ${
@@ -237,7 +242,7 @@ export class Hud {
               .join('')}</table>`
           : ''
       }
-      <p class="hint">Everyone who’s ever farmed here, all time. <kbd>L</kbd> to close</p>`
+      <p class="hint">Everyone who’s ever farmed here, all time.<span class="keys"> <kbd>L</kbd> to close</span></p>`
   }
 
   alert(kind: AlertKind, text: string, cheer = false) {
@@ -382,12 +387,12 @@ export class Hud {
         })
         .join('')}</table>`
     }
-    el.innerHTML = `
+    el.innerHTML = `${CLOSE}
       <h3>Farm shop</h3>
       <p class="wallet">🪙 <b>${coins}</b> in the farm wallet. Everyone shares it: spend it wisely!</p>
       <div class="tabs">${tabs}</div>
       ${body}
-      <p class="hint">Earn coins each morning for happy, well-fed piggies. <kbd>B</kbd> to close</p>`
+      <p class="hint">Earn coins each morning for happy, well-fed piggies.<span class="keys"> <kbd>B</kbd> to close</span></p>`
     el.querySelectorAll<HTMLButtonElement>('button[data-tab]').forEach((b) =>
       b.addEventListener('click', () => {
         this.shopTab = b.dataset.tab as ShopTab
