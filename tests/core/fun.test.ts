@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { pigCanStand, BEDS, GARDENS, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { pigCanStand, BEDS, GARDENS, SALAD_SPOT, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { CAR_FARM, JUDGE_MS, RESULTS_MS, RIVALS, SHOW_AT, SHOW_BOARD_MS, SHOW_PRIZES, SPOTS, TABLE_SPOT, total } from '../../src/core/show.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
@@ -648,7 +648,13 @@ describe('salad night', () => {
     // Everybody's out on the lawn and peckish.
     for (const p of farm.pigs) Object.assign(p, { x: -3 + (p.id % 6) * 1.5, z: 2 + Math.floor(p.id / 6) * 1.5, hunger: 70, state: 'idle', until: farm.t + 1000 })
     farm.out = []
+    // Picked up at the station, carried to the middle of the barn, put down.
     farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(true)
+    expect(farm.saladServed).toBe(false)
+    Object.assign(me, SALAD_SPOT, { z: SALAD_SPOT.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(false)
     expect(farm.saladServed).toBe(true)
     expect(farm.foods.get(SALAD_ID)!.bites).toBe(14 * SALAD_BITES)
     expect(alerts(farm, 'fun').some((a) => a.text.includes('salad'))).toBe(true)
@@ -676,10 +682,50 @@ describe('salad night', () => {
     dusk(farm)
     Object.assign(me, { x: 5, z: 5 })
     farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(false)
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(true)
+    // Not just anywhere: only in the middle of the barn (or back on the station).
+    Object.assign(me, { x: 5, z: -20 })
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(true)
     expect(farm.saladServed).toBe(false)
     Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
     farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBe(false)
+    expect(farm.saladServed).toBe(false)
+    // Hands full while carrying it.
+    farm.handle(id, { t: 'serve' })
+    me.basket[0] = 2
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: 0, z: -15 })
+    expect(me.basket[0]).toBe(2)
+    Object.assign(me, SALAD_SPOT)
+    farm.handle(id, { t: 'serve' })
     expect(farm.saladServed).toBe(true)
+  })
+
+  it('carrying the platter about, the peckish piggies come wheeking along after it (the full ones do not)', () => {
+    const { farm, id, me } = setup()
+    farm.salad = [3, 3, 3, 3, 0]
+    dusk(farm)
+    for (const p of farm.pigs) Object.assign(p, { x: -10 + (p.id % 6) * 1.5, z: -20 + Math.floor(p.id / 6) * 1.5, hunger: 60, state: 'idle', until: farm.t + 60_000 })
+    const full = farm.pigs[0]
+    full.hunger = 100
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    run(farm, 200)
+    const chasing = farm.pigs.filter((p) => p.state === 'chase')
+    expect(chasing.length).toBeGreaterThan(farm.pigs.length / 2)
+    expect(full.state).not.toBe('chase')
+    // Off they trot after it, out on the lawn and close behind (bar the odd one that stops for a snack on the way).
+    Object.assign(me, { x: 0, z: 0, yaw: Math.PI })
+    expect(run(farm, 20_000, () => chasing.filter((p) => dist(p, me) < 3).length >= chasing.length - 1)).toBe(true)
+    // Down it goes: they tuck in.
+    Object.assign(me, SALAD_SPOT)
+    farm.handle(id, { t: 'serve' })
+    expect(farm.pigs.filter((p) => p.state === 'chase')).toHaveLength(0)
+    expect(run(farm, 30_000, () => farm.pigs.some((p) => p.state === 'eat' && p.food === SALAD_ID))).toBe(true)
   })
 })
 
@@ -808,8 +854,11 @@ describe('the pig show', () => {
     farm.tick(TICK_MS)
     const coins = farm.coins
 
-    // Onto the judging table.
-    Object.assign(me, { x: TABLE_SPOT.x, z: TABLE_SPOT.z + 1.6 })
+    // Onto the judging table: walking up to it (the position comes over the wire like any other).
+    const walk = parseClientMsg(JSON.stringify({ t: 'state', x: TABLE_SPOT.x, y: 0, z: TABLE_SPOT.z + 1.6, yaw: 0 }))
+    expect(walk).not.toBeNull()
+    farm.handle(id, walk!)
+    expect(me.z).toBeCloseTo(TABLE_SPOT.z + 1.6, 1)
     farm.handle(id, { t: 'putdown' }) // not just anywhere
     expect(me.holding).toBe(star.id)
     farm.handle(id, { t: 'judge' })
@@ -826,7 +875,7 @@ describe('the pig show', () => {
 
     // Back to the spot: Ann's was the only piggy, so that's everyone, and out come the results.
     farm.out = []
-    Object.assign(me, SPOTS[0])
+    farm.handle(id, parseClientMsg(JSON.stringify({ t: 'state', x: SPOTS[0].x, y: 0, z: SPOTS[0].z, yaw: 0 }))!)
     run(farm, 200)
     const results = sent(farm).find((m) => m.t === 'showResults')
     if (results?.t !== 'showResults') throw new Error('no results')

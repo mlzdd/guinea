@@ -1,5 +1,5 @@
 import { BEDS, BOWLS, HAY_PATCHES, HAY_RACKS, HAY_STACKS, HOPPERS } from './map.ts'
-import type { BoardRow, Placing, Scores } from './show.ts'
+import { SHOW_AREA, type BoardRow, type Placing, type Scores } from './show.ts'
 import type { PigLook } from './pigs.ts'
 import { EMOTES, FARMER_COLORS, ISSUES, SQUARE_IDS, UPGRADE_IDS, VEGGIES, type Issue, type SquareId, type Stat, type UpgradeId, type Veg } from './rules.ts'
 
@@ -23,6 +23,8 @@ export type PigState =
   | 'scoot'
   /** Up on the judging table at the pig show. */
   | 'show'
+  /** Wheeking along after someone carrying the salad platter. */
+  | 'chase'
   /** Sneaked into a veg patch: squeezing in, munching a bed (it stops growing), or squeezing back out. */
   | 'raid'
   /** Playing in the hut meadow: off to a tunnel and scurrying through it… */
@@ -57,6 +59,8 @@ export interface FarmerSnap {
   /** In the show car waiting to go, or at the pig show. */
   aboard: boolean
   atShow: boolean
+  /** Carrying the salad platter (hands full). */
+  platter: boolean
 }
 
 /** The pig show, while it's on: the car waiting, the show itself, or the results. */
@@ -238,8 +242,8 @@ export type ServerMsg =
   | { t: 'diary'; rows: DiaryRow[] }
 
 const MAX_NAME = 16
-/** Farmer positions further out than this are nonsense. */
-const MAX_COORD = 60
+/** Farmer positions further out than this are nonsense (the pig show's barn is the furthest anyone goes). */
+const MAX_COORD = Math.max(SHOW_AREA.x1, -SHOW_AREA.x0, SHOW_AREA.z1, -SHOW_AREA.z0) + 5
 const MAX_Y = 4
 
 export function cleanName(name: unknown, fallback = 'Farmer'): string {

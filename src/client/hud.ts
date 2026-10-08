@@ -79,6 +79,7 @@ export function mood(p: PigSnap): string {
   if (p.s === 'flee' || p.s === 'hide') return 'scared!'
   if (p.s === 'scoot') return 'being herded'
   if (p.s === 'show') return 'being judged!'
+  if (p.s === 'chase') return 'following the salad!'
   if (p.s === 'tunnel') return 'playing in the tunnels!'
   if (p.s === 'peek') return 'playing hide and seek'
   if (p.s === 'mope') return p.hunger < 35 ? 'weak with hunger' : p.issues ? 'feeling poorly' : 'glum'

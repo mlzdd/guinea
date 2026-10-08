@@ -973,7 +973,8 @@ kbd {
   position: absolute;
   left: 16px;
   bottom: 16px;
-  max-width: 360px;
+  /* As wide as there's room for left of the basket (bottom middle), between 340 and 760px */
+  max-width: max(340px, min(760px, calc(50vw - 270px)));
   /* Never taller than the window (leaving room for the farmer list and jobs above): scrolls instead */
   max-height: calc(100vh - 220px);
   overflow-y: auto;

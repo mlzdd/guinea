@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { mat } from './veg.ts'
+import { makeVeg, mat } from './veg.ts'
 import { makeHay, makeSack } from './world.ts'
 
 const box = new THREE.BoxGeometry(1, 1, 1)
@@ -62,6 +62,8 @@ export class FarmerModel {
   private readonly basketFill: THREE.Mesh
   private readonly sack = makeSack()
   private readonly hay = makeHay()
+  /** The salad platter, held out in front for all the piggies to see. */
+  private readonly platter = new THREE.Group()
   private throwT = 1
   private walkPhase = 0
 
@@ -107,6 +109,22 @@ export class FarmerModel {
     this.hay.position.set(-0.45, 1.0, -0.05)
     this.hay.scale.setScalar(0.5)
     r.add(this.hay)
+    // The salad platter: a big white plate heaped with veg.
+    const plate = part(cyl, 0xf6f1e7, [0.38, 0.04, 0.38], [0, 0, 0])
+    this.platter.add(plate)
+    const kinds = ['lettuce', 'carrot', 'cucumber', 'pepper', 'lettuce', 'carrot', 'apple'] as const
+    kinds.forEach((k, i) => {
+      const v = makeVeg(k)
+      const a = i * 2.4
+      const rad = 0.26 * Math.sqrt((i + 0.5) / kinds.length)
+      v.position.set(Math.cos(a) * rad, 0.05, Math.sin(a) * rad)
+      v.rotation.y = a
+      v.scale.setScalar(0.45)
+      this.platter.add(v)
+    })
+    this.platter.position.set(0, 1.28, -0.52)
+    this.platter.visible = false
+    r.add(this.platter)
 
     if (name) {
       const tag = textSprite(name)
@@ -121,11 +139,13 @@ export class FarmerModel {
 
   /**
    * `speed` in m/s; `holding` = a pig or a sack in its arms; `fill` = how full the basket is (0..1) and the top veg's colour;
-   * `sack` = a sack of pellets in its arms; `airborne` = mid-jump; `hay` = hay in the basket. Sets the walking bob as
-   * root.position.y: add the feet height after.
+   * `sack` = a sack of pellets in its arms; `airborne` = mid-jump; `hay` = hay in the basket; `platter` = carrying the
+   * salad platter. Sets the walking bob as root.position.y: add the feet height after.
    */
-  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false, airborne = false, hay = false) {
+  pose(dt: number, speed: number, holding: boolean, fill: number, fillColor: number, sack = false, airborne = false, hay = false, platter = false) {
     this.sack.visible = sack
+    this.platter.visible = platter
+    if (platter) holding = true
     this.hay.visible = hay && !holding
     this.walkPhase += dt * Math.min(speed, 9) * 2.2
     const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
@@ -140,9 +160,10 @@ export class FarmerModel {
     }
     const [left, right] = this.arms
     if (holding) {
-      // Both arms out in front, cradling a pig.
-      left.rotation.set(1.25, 0, -0.35)
-      right.rotation.set(1.25, 0, 0.35)
+      // Both arms out in front, cradling a pig (or up a bit higher, holding the platter level).
+      const up = this.platter.visible ? 0.3 : 0
+      left.rotation.set(1.25 + up, 0, -0.35)
+      right.rotation.set(1.25 + up, 0, 0.35)
     } else {
       left.rotation.set(0.35, 0, 0.1)
       this.throwT = Math.min(1, this.throwT + dt * 3)

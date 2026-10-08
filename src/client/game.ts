@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_BALE, HAY_RACKS, HOPPERS, rackBuilt, rackFront, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_BALE, SALAD_SPOT, HAY_RACKS, HOPPERS, rackBuilt, rackFront, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
@@ -17,6 +17,7 @@ import {
   PUP_DAYS,
   REACH,
   SALAD_FROM,
+  PLATTER_PLACE,
   SALAD_KINDS,
   SALAD_MAX,
   SALAD_MIN,
@@ -72,7 +73,8 @@ const pickOne = <T>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.len
 const WHEEK = ['WHEEK!', 'wheek wheek!', 'WHEEEEK!', 'wheeek!', 'WHEEK WHEEK!']
 const MONCH = ['monch monch', 'monch', 'nom nom', 'crunch', 'munch munch', 'monchmonch', 'nomnomnom']
 const CHUTT = ['chutt chutt', 'purrr', 'chut?', 'mrrr']
-const HAY_COLOR = 0xe0bf5c
+/** Timothy hay green (in the basket). */
+const HAY_COLOR = 0x98ad54
 const VEG_COLOR: Record<Veg, number> = { carrot: 0xf07b1d, lettuce: 0x86c94a, cucumber: 0x2f7a2a, pepper: 0x4fae32, apple: 0xd8322b }
 
 /** Turns `a` towards `b` the short way round. */
@@ -498,6 +500,7 @@ export class Game {
     this.world.setBeds(snap.beds)
     this.world.setBowls(snap.bowls)
     this.world.setSalad(snap.salad.veg, snap.salad.bites)
+    this.world.setPlatterCarried(snap.farmers.some((f) => f.platter))
     this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
     this.world.setUpgrades(snap.upgrades)
     this.world.setRacks(snap.racks)
@@ -602,6 +605,10 @@ export class Game {
       this.hud.toast('Pour that sack into a hopper first (E)')
       return
     }
+    if (this.mySnap()?.platter) {
+      this.hud.toast('Hands full: put the salad platter down in the middle of the barn first (E)')
+      return
+    }
     if (this.selected === HAY_SLOT) {
       if (this.hayArmfuls() <= 0) {
         this.selected = 0
@@ -685,7 +692,7 @@ export class Game {
     const sack = this.hasSack()
     const hay = this.hayArmfuls()
     const used = basket.reduce((a, b) => a + b, 0) + hay * HAY_SLOTS
-    mine.pose(dt, airborne ? 0 : this.me.speed, holding !== null || sack, used / this.basketMax(), hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack, airborne, hay > 0)
+    mine.pose(dt, airborne ? 0 : this.me.speed, holding !== null || sack, used / this.basketMax(), hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], sack, airborne, hay > 0, !!this.mySnap()?.platter)
     mine.root.position.y += this.me.y
 
     if (performance.now() - this.lastSend > SEND_MS) {
@@ -757,7 +764,7 @@ export class Game {
       const top = s.basket.findLastIndex((n) => n > 0)
       const airborne = v.y > groundAt(v) + 0.05
       const used = s.basket.reduce((a, b) => a + b, 0) + s.hay * HAY_SLOTS
-      v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || s.sack, used / this.basketMax(), s.hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, airborne, s.hay > 0)
+      v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || s.sack, used / this.basketMax(), s.hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, airborne, s.hay > 0, s.platter)
       v.model.root.position.y += v.y
     }
   }
@@ -871,6 +878,8 @@ export class Game {
           return say(pickOne(MONCH), 'monch', 1.2)
         case 'raid':
           return say(pickOne(['shh… 🤫', 'nobody look…', '🤫']), 'plain', 3)
+        case 'chase':
+          return say(pickOne(['WHEEEK!', 'WHEEK WHEEK!', 'salad?!', 'WHEEEEK!']), 'wheek', 0.9)
         case 'tunnel':
           return say(pickOne(['tunnel time!', 'wheee!', 'race you!']), 'love', 2.5)
         case 'peek':
@@ -907,6 +916,8 @@ export class Game {
     switch (s) {
       case 'raid':
         return say(pickOne(['nom nom 🤫', 'munch munch', 'shh… nom']), 'monch', 2.5)
+      case 'chase':
+        return say(pickOne(['WHEEK!', 'WHEEEK!', 'wheek wheek!', 'salad!!']), 'wheek', 1)
       case 'tunnel':
         return say(pickOne(['wheee!', 'zoom!', 'whoosh!']), 'love', 2.5)
       case 'peek':
@@ -1024,7 +1035,12 @@ export class Game {
     // The show car in the yard, while it waits.
     const mine = this.mySnap()
     const car = snap.show?.phase === 'boarding' && !mine?.aboard && !sack ? dist(me, CAR_FARM) : Infinity
-    if (mine?.aboard || mine?.atShow) {
+    if (mine?.platter) {
+      // Carrying the salad platter: to the glowing ring in the middle of the barn (or back on the station).
+      if (dist(me, SALAD_SPOT) <= PLATTER_PLACE - 0.1) best = { label: '<b>Put the salad platter down 🥗 Supper time!</b>', msg: { t: 'serve' }, d: 0 }
+      else if (dist(me, SALAD_TABLE) < REACH - 0.2) best = { label: 'Put the platter back on the station', msg: { t: 'serve' }, d: 0 }
+      else best = { label: '🥗 Carry the platter to the glowing ring in the middle of the barn (the piggies are following you!)', msg: null, d: 0 }
+    } else if (mine?.aboard || mine?.atShow) {
       best = this.showAction(holding)
     } else if (holding !== null) {
       best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
@@ -1042,7 +1058,10 @@ export class Game {
         const d = table - 0.8
         if (sal.served) offer({ label: '🥗 Tonight’s salad is served! Make another tomorrow', msg: null, d })
         else if (count > 0 && total < SALAD_MAX) offer({ label: `Put your veg in the salad 🥗 (${total}/${SALAD_MAX})`, msg: { t: 'salad' }, d })
-        else if (ready && snap.time >= SALAD_FROM) offer({ label: '<b>Serve the salad platter 🥗 Supper time!</b>', msg: { t: 'serve' }, d })
+        else if (ready && snap.time >= SALAD_FROM) {
+          const carrier = snap.farmers.find((f) => f.platter)
+          offer(carrier ? { label: `🥗 ${carrier.name} has the platter: follow them in!`, msg: null, d } : { label: '<b>Pick up the salad platter 🥗 Supper time!</b>', msg: { t: 'serve' }, d })
+        }
         else if (ready) offer({ label: `🥗 Salad’s ready (${total} veg, ${kinds} kinds): serve it at dusk`, msg: null, d })
         else offer({ label: `🥗 Salad: ${total}/${SALAD_MIN} veg, ${kinds}/${SALAD_KINDS} kinds. Bring veg from the garden!`, msg: null, d })
       }

@@ -401,6 +401,12 @@ export const SALAD_KINDS = 3
 export const SALAD_BITES = 2
 /** It can be served from a little before nightfall (fraction of the day). */
 export const SALAD_FROM = NIGHT_START - 0.06
+/**
+ * Serving it: pick the platter up at the station and carry it to the middle of the barn (SALAD_SPOT, within
+ * PLATTER_PLACE). While it's carried, every peckish piggy within PLATTER_LURE comes wheeking along after it.
+ */
+export const PLATTER_PLACE = 1.6
+export const PLATTER_LURE = 14
 
 // Zoomies: the zoomometer charges while the herd is happy; when it's full, every happy pig goes wild for a bit.
 export const ZOOMIES_MS = 25_000

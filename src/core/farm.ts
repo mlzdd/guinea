@@ -194,6 +194,8 @@ import {
   REACH,
   SALAD_BITES,
   SALAD_FROM,
+  PLATTER_LURE,
+  PLATTER_PLACE,
   SALAD_KINDS,
   SALAD_MAX,
   SALAD_MIN,
@@ -380,6 +382,8 @@ interface Farmer {
   /** In the show car waiting to go, or at the pig show. */
   aboard: boolean
   atShow: boolean
+  /** Carrying the salad platter. */
+  platter: boolean
 }
 
 /** A farmer at the pig show: the piggy they brought (null: just watching), their spot, its scores, back at the spot. */
@@ -699,6 +703,7 @@ export class Farm {
       hay: kept?.hay ?? 0,
       aboard: false,
       atShow: false,
+      platter: false,
       lastShoo: -1e9,
       lastEmote: -1e9,
       lastX: spot.x,
@@ -716,6 +721,7 @@ export class Farm {
     this.leaveShow(f)
     this.putDown(f)
     if (f.sack) this.sacks++ // the sack goes back in the bin
+    f.platter = false // and the platter back on the station
     this.baskets.set(f.name, { basket: [...f.basket], hay: f.hay })
     this.farmers.delete(id)
     this.alert('farmer', `${f.name} went home`)
@@ -782,7 +788,7 @@ export class Farm {
       }
       case 'pickup': {
         const p = this.pigs[msg.pig]
-        if (!p || f.holding !== null || f.sack || AWAY.includes(p.state) || dist(f, p) > REACH) return
+        if (!p || this.handsFull(f) || AWAY.includes(p.state) || dist(f, p) > REACH) return
         p.state = 'held'
         p.heldBy = f.id
         p.food = null
@@ -825,7 +831,7 @@ export class Farm {
         return this.shoo(f)
       case 'sack':
         // Pick up a sack at the feed bin (if today's aren't all used), or put it back.
-        if (f.holding !== null || dist(f, FEED_BIN) > REACH) return
+        if (f.holding !== null || f.platter || dist(f, FEED_BIN) > REACH) return
         if (f.sack) {
           f.sack = false
           this.sacks++
@@ -836,7 +842,7 @@ export class Farm {
         return
       case 'bale': {
         // The hay table: as many armfuls off today's bale as fit in your basket.
-        if (f.holding !== null || f.sack || dist(f, HAY_BALE) > REACH) return
+        if (this.handsFull(f) || dist(f, HAY_BALE) > REACH) return
         const n = Math.min(this.bale, Math.floor(this.basketRoom(f) / HAY_SLOTS))
         f.hay += n
         this.bale -= n
@@ -844,14 +850,14 @@ export class Farm {
       }
       case 'hay':
         // Cut an armful from a patch of the hay meadow into your basket (the patch grows back).
-        if (f.holding !== null || f.sack || !owns('meadow') || !inRect(f, HAY_PATCHES[msg.patch], 0.8)) return
+        if (this.handsFull(f) || !owns('meadow') || !inRect(f, HAY_PATCHES[msg.patch], 0.8)) return
         if (this.t < this.hayField[msg.patch] || this.basketRoom(f) < HAY_SLOTS) return
         f.hay += Math.min(hayYield(this.upgrades), Math.floor(this.basketRoom(f) / HAY_SLOTS))
         this.hayField[msg.patch] = this.t + hayRegrowMs(this.upgrades)
         return
       case 'stack': {
         // The stack yard: tip your hay onto a haystack, or (with none on you) take as much as fits in your basket.
-        if (f.holding !== null || f.sack || !owns('meadow') || dist(f, HAY_STACKS[msg.stack]) > 1.8) return
+        if (this.handsFull(f) || !owns('meadow') || dist(f, HAY_STACKS[msg.stack]) > 1.8) return
         const n = f.hay
           ? Math.min(f.hay, hayStackMax(this.upgrades) - this.hayStacks[msg.stack])
           : -Math.min(this.hayStacks[msg.stack], Math.floor(this.basketRoom(f) / HAY_SLOTS))
@@ -955,8 +961,19 @@ export class Farm {
         return
       }
       case 'serve':
-        if (dist(f, SALAD_TABLE) > REACH || !this.canServe()) return
-        return this.serveSalad(f)
+        // Carrying the platter: down it goes in the middle of the barn (or back on the station).
+        if (f.platter) {
+          if (dist(f, SALAD_SPOT) <= PLATTER_PLACE) {
+            f.platter = false
+            return this.serveSalad(f)
+          }
+          if (dist(f, SALAD_TABLE) <= REACH) f.platter = false
+          return
+        }
+        // At the station when it's time: pick it up (one platter, empty hands).
+        if (dist(f, SALAD_TABLE) > REACH || !this.canServe() || this.handsFull(f) || this.platterCarrier()) return
+        f.platter = true
+        return
       case 'diary':
         this.out.push({ to: f.id, msg: { t: 'diary', rows: this.diaryRows() } })
         return
@@ -975,6 +992,16 @@ export class Farm {
   /** Ready, not served yet tonight, and late enough in the day. */
   canServe() {
     return !this.saladServed && this.saladReady() && (this.night || this.dayTime >= SALAD_FROM)
+  }
+
+  /** Holding a piggy, a sack of pellets or the salad platter: no hands for anything else. */
+  private handsFull(f: Farmer) {
+    return f.holding !== null || f.sack || f.platter
+  }
+
+  /** Whoever's carrying the salad platter. */
+  private platterCarrier(): Farmer | undefined {
+    for (const f of this.farmers.values()) if (f.platter) return f
   }
 
   /** Supper! The platter goes down in the barn and every pig that's not stuffed comes in for it. */
@@ -1055,7 +1082,7 @@ export class Farm {
 
   private throwVeg(f: Farmer, veg: Veg | 'hay', at: P) {
     const i = veg === 'hay' ? -1 : VEGGIES.indexOf(veg)
-    if (f.holding !== null || f.sack || (veg === 'hay' ? f.hay : f.basket[i]) <= 0) return
+    if (this.handsFull(f) || (veg === 'hay' ? f.hay : f.basket[i]) <= 0) return
     let dx = at.x - f.x
     let dz = at.z - f.z
     const d = Math.hypot(dx, dz)
@@ -1147,7 +1174,7 @@ export class Farm {
     // Dusk: time for the salad.
     if (!this.saladServed && !this.night && this.dayTime >= SALAD_FROM && this.saladCalled !== this.day) {
       this.saladCalled = this.day
-      this.alert('fun', this.saladReady() ? '🥗 Dusk! Serve the salad platter in the barn (E at the salad station)' : '🥗 Dusk! Make up the salad platter in the barn: 10+ veg, 3+ kinds')
+      this.alert('fun', this.saladReady() ? '🥗 Dusk! Pick up the salad platter at the station and carry it to the middle of the barn: the piggies will follow you!' : '🥗 Dusk! Make up the salad platter in the barn: 10+ veg, 3+ kinds')
     }
 
     // The zoomometer: charges while the herd is happy (faster the happier), drains when it isn't, rests at night.
@@ -1948,6 +1975,14 @@ export class Farm {
       }
     }
 
+    // Someone's carrying the salad platter: the peckish ones come wheeking along after it.
+    const carrier = this.platterCarrier()
+    if (carrier && CALM.includes(p.state) && p.hunger < FULL && dist(p, carrier) < PLATTER_LURE && !(this.doorShut && isInside(p) !== isInside(carrier))) {
+      this.setState(p, 'chase', 0)
+      p.path = []
+      p.pathFor = null
+    }
+
     // No wandering off outside after dusk.
     if (this.evening && p.state === 'wander' && !isInside({ x: p.tx, z: p.tz })) return this.goHome(p)
 
@@ -1957,6 +1992,16 @@ export class Farm {
       case 'tunnel':
       case 'peek':
         return this.playing(p, dt)
+      case 'chase': {
+        // Close behind whoever has the platter, fanned out a little, nose up.
+        const c = this.platterCarrier()
+        if (!c || dist(p, c) > PLATTER_LURE * 1.5) return this.decide(p)
+        const ahead = facing(c.yaw)
+        const fan = (((p.id * 0.618) % 1) - 0.5) * 2.4
+        const spot = { x: c.x - ahead.x * 1.3 + ahead.z * fan, z: c.z - ahead.z * 1.3 - ahead.x * fan }
+        if (this.moveTo(p, spot, PIG_SCURRY * this.pace(p, 'food'), dt, 0.4)) p.yaw = yawTowards(p, c)
+        return
+      }
       case 'seek': {
         const food = p.food === null ? undefined : this.foods.get(p.food)
         if (!food || food.bites <= 0) return this.afterMeal(p)
@@ -2341,7 +2386,8 @@ export class Farm {
     this.sacks = HOPPERS.filter((_, i) => this.hopperBuilt(i)).length + extraSacks(this.upgrades)
     // …and a new bale of hay on the hay table.
     this.bale = BALE_ARMFULS
-    // Last night's leftovers get cleared away; a new platter can be made.
+    // Last night's leftovers get cleared away; a new platter can be made (and one still being carried about goes back).
+    for (const f of this.farmers.values()) f.platter = false
     this.saladServed = false
     this.foods.get(SALAD_ID)!.bites = 0
     this.craving = this.pick(VEGGIES.filter((v) => v !== this.craving))
@@ -2480,7 +2526,7 @@ export class Farm {
   /** At the show car: in (with the piggy you're holding, or to watch), or out again. */
   private board(f: Farmer) {
     const s = this.show
-    if (!s || s.phase !== 'boarding' || f.atShow || f.sack || dist(f, CAR_FARM) > CAR_REACH) return
+    if (!s || s.phase !== 'boarding' || f.atShow || f.sack || f.platter || dist(f, CAR_FARM) > CAR_REACH) return
     f.aboard = !f.aboard
     if (f.aboard) {
       const p = f.holding === null ? null : this.pigs[f.holding]
@@ -2689,6 +2735,7 @@ export class Farm {
       hay: f.hay,
       aboard: f.aboard,
       atShow: f.atShow,
+      platter: f.platter,
     }))
     const pigs: PigSnap[] = this.pigs.map((p) => ({
       id: p.id,

@@ -95,14 +95,17 @@ export const strawTex = canvasTexture(
   6,
 )
 
-/** Standing hay seen from the side: close-packed vertical stalks in a few golds. */
+/** Timothy hay: mostly green strands (sage to grassy), with some dry beige ones through it. */
+const TIMOTHY = ['#7c973f', '#a9bd62', '#6a8834', '#d4c38a', '#94ac4e', '#b9c873', '#7f9a44', '#c7b475']
+
+/** Standing hay from the side: long streaky stalks. */
 const strawSidesTex = canvasTexture(
   128,
   (g, s) => {
-    g.fillStyle = '#d9b85a'
+    g.fillStyle = '#90a64c'
     g.fillRect(0, 0, s, s)
     for (let i = 0; i < 500; i++) {
-      g.fillStyle = ['#c9a44a', '#e8cb72', '#b8933c', '#f0d888', '#a8853a'][i % 5]
+      g.fillStyle = TIMOTHY[i % TIMOTHY.length]
       const x = Math.random() * s
       g.fillRect(x, Math.random() * s * 0.3, 1 + Math.random() * 1.5, s)
     }
@@ -121,9 +124,9 @@ strawSidesTex.repeat.set(3, 1)
 const strawTopTex = canvasTexture(
   128,
   (g, s) => {
-    g.fillStyle = '#d4b255'
+    g.fillStyle = '#8ea44b'
     g.fillRect(0, 0, s, s)
-    speckle(g, s, 1800, ['#c49f45', '#e6c96e', '#b08a36', '#f2dc90'], 2, 2)
+    speckle(g, s, 1800, TIMOTHY, 2, 2)
   },
   2,
 )
@@ -263,12 +266,13 @@ export function makeSack(): THREE.Mesh {
   return shadowed(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: sackTex })))
 }
 
+/** Cut timothy hay (bales, armfuls, the racks): green strands with some beige, and the twine round a bale. */
 const hayTex = canvasTexture(
   64,
   (g, s) => {
-    g.fillStyle = '#e0bf5c'
+    g.fillStyle = '#98ad54'
     g.fillRect(0, 0, s, s)
-    speckle(g, s, 300, ['#c9a64c', '#f0d070', '#b8953e'], 1, 4)
+    speckle(g, s, 420, TIMOTHY, 1, 4)
     g.fillStyle = '#8a6a2c'
     g.fillRect(0, s * 0.3, s, 2)
     g.fillRect(0, s * 0.7, s, 2)
@@ -370,6 +374,9 @@ export class World {
   private readonly saladServed = new THREE.Group()
   private saladKey = ''
   private saladFloor: THREE.Group | null = null
+  /** The station's own platter (gone while someone's carrying it about), and the glowing ring where it goes down. */
+  private stationPlatter = new THREE.Group()
+  private readonly platterRing = new THREE.Group()
   /** Hay in each rack (and the bit on the floor in front that pigs eat), and the sacks on the feed bin. */
   private readonly racks: { root: THREE.Group; hay: THREE.Mesh; floor: THREE.Mesh; deep: THREE.Group }[] = []
   private readonly binSacks: THREE.Mesh[] = []
@@ -543,7 +550,7 @@ export class World {
 
   /** The hay meadow: a field of patches of thick standing hay (on the same lawn as everywhere else). */
   private buildMeadow() {
-    const stubble = new THREE.MeshLambertMaterial({ map: hayTex, color: 0xd8c27a })
+    const stubble = new THREE.MeshLambertMaterial({ map: hayTex, color: 0xd9dcb0 })
     // Each patch is packed tufts of hay (streaky straw down the sides, a speckled top), a little taller or shorter
     // than their neighbours, with thin stalks poking up out of them so the top is ragged, not flat.
     const sides = new THREE.MeshLambertMaterial({ map: strawSidesTex })
@@ -554,7 +561,8 @@ export class World {
     const cell = HAY_PATCH / TUFTS
     const stalk = new THREE.CylinderGeometry(0.012, 0.02, 1, 3)
     stalk.translate(0, 0.5, 0)
-    const golds = [mat(0xe2c162), mat(0xd6b452), mat(0xeccf7a)]
+    // Timothy stalks: mostly green, the odd dry one.
+    const stalks = [mat(0x8fab4a), mat(0x7d9a3e), mat(0xa5bc5e), mat(0xd2c088)]
     let seed = 5
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
     const m4 = new THREE.Matrix4()
@@ -581,9 +589,9 @@ export class World {
       mass.castShadow = true
       mass.receiveShadow = true
       tall.add(mass)
-      for (const gold of golds) {
+      for (const colour of stalks) {
         const n = 150
-        const inst = new THREE.InstancedMesh(stalk, gold, n)
+        const inst = new THREE.InstancedMesh(stalk, colour, n)
         for (let i = 0; i < n; i++) {
           e.set((rnd() - 0.5) * 0.3, 0, (rnd() - 0.5) * 0.3)
           m4.compose(
@@ -1121,9 +1129,9 @@ export class World {
     const plate = (r: number) => shadowed(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, 0.06, 24), mat(0xf6f1e7)))
     const p1 = plate(0.55)
     p1.position.y = 0.83
-    table.add(p1)
     this.saladMaking.position.y = 0.86
-    table.add(this.saladMaking)
+    this.stationPlatter.add(p1, this.saladMaking)
+    table.add(this.stationPlatter)
     const sign = this.sign('🥗 Salad station', 1.8, 0.4)
     sign.position.set(0, 1.35, 0.1)
     table.add(sign)
@@ -1136,6 +1144,29 @@ export class World {
     floor.add(this.saladServed)
     this.scene.add(floor)
     this.saladFloor = floor
+
+    // Where the platter goes: a glowing ring on the barn floor, pulsing while someone's carrying it.
+    const glow = new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.85, depthWrite: false })
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.4, 40), glow)
+    const inner = new THREE.Mesh(new THREE.CircleGeometry(1.15, 40), new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.22, depthWrite: false }))
+    for (const m of [ring, inner]) {
+      m.rotation.x = -Math.PI / 2
+      m.renderOrder = 4
+    }
+    ring.position.y = 0.06
+    inner.position.y = 0.05
+    const label = this.sign('🥗 Supper goes here!', 2.2, 0.45)
+    label.position.y = 1.4
+    this.platterRing.add(ring, inner, label)
+    this.platterRing.position.set(SALAD_SPOT.x, 0, SALAD_SPOT.z)
+    this.platterRing.visible = false
+    this.scene.add(this.platterRing)
+  }
+
+  /** Someone's carrying the salad platter about: off the station, and the ring showing where it goes. */
+  setPlatterCarried(on: boolean) {
+    this.stationPlatter.visible = !on
+    this.platterRing.visible = on
   }
 
   /** Fills the platters: veg being made up on the station, and what's left of tonight's on the floor. */
@@ -1175,6 +1206,7 @@ export class World {
   /** Per-frame animation: the gate swinging and the rain falling. */
   update(dt: number, focus: THREE.Vector3) {
     this.clock += dt
+    if (this.platterRing.visible) this.platterRing.children[0].scale.setScalar(1 + Math.sin(this.clock * 5) * 0.08)
     const c = center(POND)
     this.ducks.forEach((d, i) => {
       const a = this.clock * (0.25 + i * 0.1) + i * 2.5
