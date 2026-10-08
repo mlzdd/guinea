@@ -224,6 +224,7 @@ import {
   VEGGIES,
   ZOOMIES_HAPPY,
   ZOOMIES_MS,
+  ZOOMIES_PAY,
   ZOOM_DRAIN,
   ZOOM_HAPPY,
   basketMax,
@@ -254,6 +255,7 @@ import {
   SHOW_BOARD_MS,
   SHOW_MS,
   SHOW_PRIZES,
+  SHOW_TAKING_PART,
   SPOTS,
   SPOT_R,
   TABLE_REACH,
@@ -1187,7 +1189,8 @@ export class Farm {
     if (this.zoomMeter >= 1) {
       this.zoomMeter = 0
       this.zoomiesUntil = this.t + ZOOMIES_MS
-      this.alert('fun', '🎉 ZOOMIES! The piggies have gone completely wild!', true)
+      this.coins += ZOOMIES_PAY
+      this.alert('fun', `🎉 ZOOMIES! The piggies have gone completely wild! +${ZOOMIES_PAY} 🪙`, true)
       for (const p of this.pigs) if (CALM.includes(p.state) && p.happy >= ZOOMIES_HAPPY) this.zoom(p)
     }
 
@@ -2634,7 +2637,7 @@ export class Farm {
     return all
   }
 
-  /** The results: placings, prizes for the top three farm piggies (a rosette for a winner), and the leaderboard. */
+  /** The results: placings, prizes for the farm piggies (by place, a little for taking part; a rosette for a winner), and the leaderboard. */
   private showResults(s: Show) {
     const farm = [...s.entrants.values()]
       .filter((e) => e.scores && e.pig !== null)
@@ -2642,8 +2645,8 @@ export class Farm {
     const placings = this.place(farm, s.rivals)
     let won = 0
     placings.forEach((pl, rank) => {
-      if (!pl.farm || rank >= SHOW_PRIZES.length) return
-      won += SHOW_PRIZES[rank]
+      if (!pl.farm) return
+      won += SHOW_PRIZES[rank] ?? SHOW_TAKING_PART
       if (rank === 0 && pl.pigId !== null) {
         const p = this.pigs[pl.pigId]
         p.rosettes = (p.rosettes ?? 0) + 1

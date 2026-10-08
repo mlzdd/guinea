@@ -49,7 +49,7 @@ import type { Net } from './net.ts'
 import { PigModel } from './pig.ts'
 import { VEG_ICON, VEG_LABEL, makeVeg } from './veg.ts'
 import { World, makeHay } from './world.ts'
-import { ShowHall } from './showhall.ts'
+import { goSpot, ShowHall, type ShowGo } from './showhall.ts'
 import { CAR_FARM, CAR_REACH, TABLE_H, TABLE_REACH, TABLE_SPOT } from '../core/show.ts'
 
 /** `selected` for the hay slot (after the veg). */
@@ -352,6 +352,9 @@ export class Game {
   private hayArmfuls(): number {
     return this.mySnap()?.hay ?? 0
   }
+
+  /** Where to head next at the pig show (the judging table or my spot), if anywhere. */
+  private showGo: ShowGo | null = null
 
   private holding(): number | null {
     return this.mySnap()?.holding ?? null
@@ -1228,19 +1231,18 @@ export class Game {
   private updateShow(dt: number) {
     const show = this.snap!.show
     const here = !!this.mySnap()?.atShow
-    // Light up where to go next: the table when it's free and my piggy's still to be judged, my spot once it has been.
+    // Light up where to go next (and point the way): the table while my piggy's still to be judged or waiting to be
+    // picked up off it, my spot once I've got it back.
     const e = here ? show?.entrants.find((x) => x.farmer === this.myId) : undefined
-    const go =
-      !e || e.pig === null || show?.phase !== 'on'
-        ? null
-        : e.total === null
-          ? show.table
-            ? null
-            : 'table'
-          : !e.back && show.table?.pig !== e.pig
-            ? { spot: e.spot }
-            : null
-    this.hall.update(dt, this.clock, show, here, go)
+    const mine = e && e.pig !== null && show?.phase === 'on' ? e.pig : null
+    const onTable = mine !== null && show?.table?.pig === mine
+    let go: ShowGo | null = null
+    if (mine === null || !e) go = null
+    else if (onTable) go = show!.table!.scores ? 'table' : null
+    else if (e.total === null) go = this.holding() === mine ? 'table' : null
+    else if (!e.back) go = { spot: e.spot }
+    this.showGo = go
+    this.hall.update(dt, this.clock, show, here, go, this.me)
     const t = here ? show?.table : null
     const key = t ? `${t.pig}|${t.scores ? 'done' : 'looking'}` : ''
     if (key !== this.judging) {
@@ -1256,10 +1258,14 @@ export class Game {
     const w = innerWidth
     const h = innerHeight
     const v3 = new THREE.Vector3()
-    const arrows: { x: number; y: number; angle: number; icon: string }[] = []
-    for (const p of this.preds.values()) {
-      if (p.snap.s === 'flee') continue
-      v3.set(p.x, p.y + 0.5, p.z).project(this.camera)
+    const arrows: { x: number; y: number; angle: number; icon: string; go?: boolean }[] = []
+    // Predators, and at the pig show where to go next (the table or your spot) when it's off the screen.
+    const targets = [...this.preds.values()]
+      .filter((p) => p.snap.s !== 'flee')
+      .map((p) => ({ x: p.x, y: p.y + 0.5, z: p.z, icon: p.snap.kind === 'fox' ? '🦊' : '🦅', go: false }))
+    if (this.showGo) targets.push({ ...goSpot(this.showGo), y: 0.5, icon: this.showGo === 'table' ? '🏆' : '📍', go: true })
+    for (const p of targets) {
+      v3.set(p.x, p.y, p.z).project(this.camera)
       const behind = v3.z > 1
       let sx = ((v3.x + 1) / 2) * w
       let sy = ((1 - v3.y) / 2) * h
@@ -1273,7 +1279,7 @@ export class Game {
       const angle = Math.atan2(sy - cy, sx - cx)
       const m = 84 // room for the pointer and the pulse
       const k = Math.min((w / 2 - m) / Math.abs(Math.cos(angle) || 1e-6), (h / 2 - m) / Math.abs(Math.sin(angle) || 1e-6))
-      arrows.push({ x: cx + Math.cos(angle) * k, y: cy + Math.sin(angle) * k, angle, icon: p.snap.kind === 'fox' ? '🦊' : '🦅' })
+      arrows.push({ x: cx + Math.cos(angle) * k, y: cy + Math.sin(angle) * k, angle, icon: p.icon, go: p.go })
     }
     this.hud.setArrows(arrows)
 

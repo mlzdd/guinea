@@ -804,6 +804,21 @@ kbd {
   animation: ripple 1.2s ease-out infinite;
 }
 
+/* At the pig show: gold, calm, pointing the way to the judging table or your spot. */
+#arrows .arrow.go i {
+  color: #ffd23a;
+}
+
+#arrows .arrow.go span {
+  background: rgb(255 226 122 / 92%);
+  box-shadow: 0 0 0 3px #fff, 0 0 14px rgb(255 210 60 / 80%);
+  animation: none;
+}
+
+#arrows .arrow.go b {
+  border-color: #ffd23a;
+}
+
 @keyframes throb {
   from {
     transform: scale(1);

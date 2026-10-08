@@ -410,6 +410,8 @@ export const PLATTER_LURE = 14
 
 // Zoomies: the zoomometer charges while the herd is happy; when it's full, every happy pig goes wild for a bit.
 export const ZOOMIES_MS = 25_000
+/** Coins for the farm when the zoomies go off. */
+export const ZOOMIES_PAY = 20
 /** A pig this happy joins in. */
 export const ZOOMIES_HAPPY = 50
 /** The zoomometer charges while the herd's average happiness is at least this… */

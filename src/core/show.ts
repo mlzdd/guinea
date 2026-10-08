@@ -21,8 +21,10 @@ export const SHOW_MS = 150_000
 export const JUDGE_MS = 5000
 /** The results stay up this long, then the car takes everyone home. */
 export const RESULTS_MS = 15_000
-/** Prizes for first, second and third (the winner gets a rosette too). */
-export const SHOW_PRIZES = [30, 15, 8]
+/** Prizes by place, rivals included: first, second, third, fourth (the winner gets a rosette too). */
+export const SHOW_PRIZES = [100, 50, 20, 10]
+/** Every other farm piggy that was judged gets this for taking part. */
+export const SHOW_TAKING_PART = 5
 
 // ---------------------------------------------------------------- the farm end
 

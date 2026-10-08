@@ -8,6 +8,17 @@ import { PigModel } from './pig.ts'
 import { mat } from './veg.ts'
 import { barnTex, grassTex, plankTex, strawTex } from './world.ts'
 
+/** Where to head next at the show: your spot (by number) or the judging table. */
+export type ShowGo = { spot: number } | 'table'
+
+/** The middle of where `go` points: your spot, or the floor in front of the judging table. */
+export function goSpot(go: ShowGo) {
+  return go === 'table' ? { x: TABLE.x0 + (TABLE.x1 - TABLE.x0) / 2, z: TABLE.z1 + 1.2 } : SPOTS[go.spot]
+}
+
+/** The ground arrow at your feet shows the way until you're this close (m). */
+const POINTER_NEAR = 2.2
+
 /** A seeded random, so the rivals' and onlookers' piggies look the same every show. */
 function seeded(seed: number) {
   let a = seed
@@ -89,6 +100,8 @@ export class ShowHall {
   private readonly beacon = new THREE.Group()
   private readonly beaconSign: THREE.Sprite
   private readonly tableSign: THREE.Sprite
+  /** A glowing arrow on the ground at your feet, pointing the way to the beacon. */
+  private readonly pointer = new THREE.Group()
 
   constructor(scene: THREE.Scene) {
     const g = this.group
@@ -197,6 +210,26 @@ export class ShowHall {
     this.beacon.visible = false
     g.add(this.beacon)
 
+    // The pointer: a fat chevron lying on the floor, its tip ahead of you (drawn pointing along +y, laid flat to −z).
+    const chevron = new THREE.Shape()
+    chevron.moveTo(0, 0.75)
+    chevron.lineTo(0.55, 0.05)
+    chevron.lineTo(0.3, 0.05)
+    chevron.lineTo(0, 0.42)
+    chevron.lineTo(-0.3, 0.05)
+    chevron.lineTo(-0.55, 0.05)
+    chevron.closePath()
+    const arrowGeo = new THREE.ShapeGeometry(chevron)
+    ;[0.9, 1.45].forEach((d, i) => {
+      const m = new THREE.Mesh(arrowGeo, glow)
+      m.rotation.x = -Math.PI / 2
+      m.position.set(0, 0.06 + i * 0.001, -d)
+      m.renderOrder = 4
+      this.pointer.add(m)
+    })
+    this.pointer.visible = false
+    g.add(this.pointer)
+
     this.hallCar.position.set(CAR_HALL.x, 0, CAR_HALL.z)
     this.farmCar.position.set(CAR_FARM.x, 0, CAR_FARM.z)
     this.farmCar.rotation.y = Math.PI / 2
@@ -215,9 +248,9 @@ export class ShowHall {
 
   /**
    * `here`: I'm at the show (otherwise the hall needn't be drawn or animated). `go`: where I should head next (my spot,
-   * or the judging table), to light it up.
+   * or the judging table), to light it up, with an arrow at `me` (my feet) pointing the way.
    */
-  update(dt: number, clock: number, show: ShowSnap | null, here: boolean, go: { spot: number } | 'table' | null = null) {
+  update(dt: number, clock: number, show: ShowSnap | null, here: boolean, go: ShowGo | null = null, me?: { x: number; z: number }) {
     this.farmCar.visible = show?.phase === 'boarding'
     this.hallCar.visible = !!show && show.phase !== 'boarding'
     this.group.visible = here
@@ -233,7 +266,7 @@ export class ShowHall {
     })
     this.beacon.visible = !!go
     if (go) {
-      const at = go === 'table' ? { x: TABLE.x0 + (TABLE.x1 - TABLE.x0) / 2, z: TABLE.z1 + 1.2 } : SPOTS[go.spot]
+      const at = goSpot(go)
       this.beacon.position.set(at.x, 0, at.z)
       this.beacon.children[0].scale.setScalar(1 + Math.sin(clock * 5) * 0.1)
       this.beaconSign.visible = go !== 'table'
@@ -241,6 +274,14 @@ export class ShowHall {
       const bob = 3.2 + Math.abs(Math.sin(clock * 3)) * 0.35
       this.beaconSign.position.y = bob
       this.tableSign.position.y = bob
+    }
+    const at = go ? goSpot(go) : null
+    this.pointer.visible = !!at && !!me && Math.hypot(at.x - me.x, at.z - me.z) > POINTER_NEAR
+    if (at && me && this.pointer.visible) {
+      this.pointer.position.set(me.x, 0, me.z)
+      this.pointer.rotation.y = yawTowards(me, at)
+      // The two chevrons light up in turn, running the way to go.
+      this.pointer.children.forEach((c, i) => c.scale.setScalar(0.85 + 0.25 * Math.max(0, Math.sin(clock * 6 - i * 1.2))))
     }
     if (!show) return
     // Rosettes on the rivals' piggies for every show they've won.

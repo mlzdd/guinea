@@ -539,8 +539,8 @@ export class Hud {
     el.style.top = `${y}px`
   }
 
-  /** Arrows round the edge of the screen pointing at predators you can't see. */
-  setArrows(list: { x: number; y: number; angle: number; icon: string }[]) {
+  /** Arrows round the edge of the screen pointing at predators you can't see (red), or where to go at the show (`go`, gold). */
+  setArrows(list: { x: number; y: number; angle: number; icon: string; go?: boolean }[]) {
     const el = $('arrows')
     while (el.children.length < list.length) {
       const a = document.createElement('div')
@@ -553,6 +553,7 @@ export class Hud {
       const item = list[i]
       a.hidden = !item
       if (!item) return
+      a.classList.toggle('go', !!item.go)
       a.style.left = `${item.x}px`
       a.style.top = `${item.y}px`
       ;(a.firstElementChild as HTMLElement).style.transform = `rotate(${item.angle}rad) translateX(44px)` // out in front of the icon

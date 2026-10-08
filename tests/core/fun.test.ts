@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
 import { pigCanStand, BEDS, GARDENS, SALAD_SPOT, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
-import { CAR_FARM, JUDGE_MS, RESULTS_MS, RIVALS, SHOW_AT, SHOW_BOARD_MS, SHOW_PRIZES, SPOTS, TABLE_SPOT, total } from '../../src/core/show.ts'
+import { CAR_FARM, JUDGE_MS, RESULTS_MS, RIVALS, SHOW_AT, SHOW_BOARD_MS, SHOW_PRIZES, SHOW_TAKING_PART, SPOTS, TABLE_SPOT, total } from '../../src/core/show.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
   CRAVING_HAPPY,
@@ -43,6 +43,7 @@ import {
   PUP_DAYS,
   RAIN_GROW,
   ZOOMIES_MS,
+  ZOOMIES_PAY,
   ZOOM_FILL_MS,
 } from '../../src/core/rules.ts'
 import { lonePig, run, seeded, setup, veg } from './helpers.ts'
@@ -220,8 +221,10 @@ describe('zoomies', () => {
     run(farm, ZOOM_FILL_MS / 4)
     expect(farm.snapshot().zoom).toBeGreaterThan(0.2)
     expect(zoomies(farm)).toBe(0)
+    const coins = farm.coins
     expect(run(farm, ZOOM_FILL_MS, () => zoomies(farm) > 0)).toBe(true)
     expect(farm.zoomMeter).toBe(0)
+    expect(farm.coins).toBe(coins + ZOOMIES_PAY)
     run(farm, 400)
     expect(farm.pigs.filter((p) => p.state === 'zoom' || p.state === 'popcorn').length).toBeGreaterThan(farm.pigs.length / 2)
     run(farm, ZOOMIES_MS + 10_000)
@@ -904,6 +907,26 @@ describe('the pig show', () => {
     expect(again.showBoard.get('Ann')?.wins).toBe(1)
     expect(again.rivalSkill).toEqual(farm.rivalSkill)
     expect(again.showDay).toBe(3)
+  })
+
+  it('a piggy placed below the prizes still gets a little for taking part', () => {
+    const { farm, id, me } = showDay()
+    farm.rivalSkill = farm.rivalSkill.map(() => 100) // a very tough year
+    const star = bringStar(farm, id, me)
+    Object.assign(star, { hunger: 5, happy: 5, issues: 0b1111 }) // ...and not our star after all
+    run(farm, SHOW_BOARD_MS + 200)
+    const coins = farm.coins
+    Object.assign(me, { x: TABLE_SPOT.x, z: TABLE_SPOT.z + 1.6 })
+    farm.handle(id, { t: 'judge' })
+    run(farm, JUDGE_MS + 100)
+    farm.handle(id, { t: 'fetch' })
+    farm.out = []
+    farm.handle(id, parseClientMsg(JSON.stringify({ t: 'state', x: SPOTS[0].x, y: 0, z: SPOTS[0].z, yaw: 0 }))!)
+    run(farm, 200)
+    const results = sent(farm).find((m) => m.t === 'showResults')
+    if (results?.t !== 'showResults') throw new Error('no results')
+    expect(results.placings.findIndex((pl) => pl.farm)).toBeGreaterThanOrEqual(SHOW_PRIZES.length)
+    expect(farm.coins).toBe(coins + SHOW_TAKING_PART)
   })
 
   it('goes on without us if nobody gets in the car; going home mid-show brings your piggy home too', () => {
