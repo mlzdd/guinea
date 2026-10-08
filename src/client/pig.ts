@@ -11,9 +11,12 @@ const blob = new THREE.CircleGeometry(1, 16)
 const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false })
 /** The body (in the body group) and head (in the head group). */
 const BODY: Ellipsoid = { c: [0, 0.18, 0.03], r: [0.22, 0.19, 0.3], warp: loaf }
-const HEAD: Ellipsoid = { c: [0, 0, -0.04], r: [0.15, 0.135, 0.16], warp: headShape }
+const HEAD: Ellipsoid = { c: [0, 0, -0.04], r: [0.155, 0.14, 0.165], warp: headShape }
+/** Fills in where the head meets the body (in the body group), so it's one fluffy shape, no neck. */
+const NECK: Ellipsoid = { c: [0, 0.2, -0.19], r: [0.18, 0.155, 0.13] }
 const bodyGeo = shapedSphere(loaf)
 const headGeo = shapedSphere(headShape, 28, 18)
+const neckGeo = shapedSphere((d) => d.clone(), 24, 16)
 /** Feet: front pair under the chin, back pair under the hips. */
 const FEET: [number, number][] = [
   [-0.07, -0.17],
@@ -29,10 +32,10 @@ const RUBY_EYE = 0x6e0d1a
 const NOSE_PINK = 0xd59a94
 /** Where the face goes on the head, as directions from its middle. */
 const dir = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).normalize()
-const EYE = (side: number) => surface(HEAD, dir(side * 0.8, 0.38, -0.45), 0.94)
+const EYE = (side: number) => surface(HEAD, dir(side * 0.66, 0.4, -0.6), 0.94)
 /** Where the whiskers grow, either side of the snout. */
-const SNOUT = (side: number) => surface(HEAD, dir(side * 0.3, -0.25, -0.92), 0.97)
-const NOSE = surface(HEAD, dir(0, -0.05, -1), 1.0)
+const SNOUT = (side: number) => surface(HEAD, dir(side * 0.32, -0.16, -0.92), 0.97)
+const NOSE = surface(HEAD, dir(0, 0.06, -1), 1.0)
 /** The point on the front of the face at (x, y) in the head group. */
 function onFace(x: number, y: number) {
   const d = new THREE.Vector3(0, 0, -1)
@@ -55,7 +58,7 @@ const earGeos = new Map<number, THREE.BufferGeometry>()
 const earGeo = (fold: number) => {
   const key = Math.round(fold * 10) / 10
   let g = earGeos.get(key)
-  if (!g) earGeos.set(key, (g = foldedOval(0.07, 0.085, key)))
+  if (!g) earGeos.set(key, (g = foldedOval(0.095, 0.115, key, 0.35)))
   return g
 }
 /** One side of an ear: the coat outside (FrontSide), pink inside (BackSide). */
@@ -108,8 +111,8 @@ function furry(coat: CoatPart, geo: THREE.BufferGeometry, s: [number, number, nu
 }
 
 /**
- * One guinea pig: a loaf of a body with a flat bottom and wide hips, a big blunt head with no neck,
- * a head tapering to a rounded point, petal ears flopping out, glossy eyes on the sides of its head, and tiny feet.
+ * One guinea pig: a loaf of a body with a flat bottom and wide hips, a big blunt head blended into it with no neck,
+ * a broad flattish muzzle, big petal ears flopping out, glossy eyes on the sides of its head, and tiny feet.
  * Built facing −Z (yaw 0). About 0.65 m nose to tail, which is huge, but they need to be seen.
  */
 export class PigModel {
@@ -144,7 +147,8 @@ export class PigModel {
 
     const b = this.body
     b.add(furry(coat.body, bodyGeo, BODY.r, BODY.c))
-    this.head.position.set(0, 0.21, -0.25)
+    b.add(furry(coat.body, neckGeo, NECK.r, NECK.c))
+    this.head.position.set(0, 0.21, -0.22)
     b.add(this.head)
     const h = this.head
     // The markings are painted into the coat (fur.ts).
@@ -194,13 +198,13 @@ export class PigModel {
     // The mouth is just creases in the coat's own colour, a shade darker.
     const crease = new THREE.Color(coatAt(coat.head, dir(0, -0.3, -1))).multiplyScalar(0.6).getHex()
     const noseColor = look.pattern === 'himalayan' ? patch : NOSE_PINK
-    // The nose pad: soft, wider at the top, tipped down a touch, barely raised.
-    const pad = part(sphere, noseColor, [0.024, 0.015, 0.007], at(0, 0, -0.003))
-    pad.rotation.x = 0.3
+    // The nose pad: soft and flat, wider at the top, tipped down a touch, hardly raised at all.
+    const pad = part(sphere, noseColor, [0.026, 0.014, 0.004], at(0, 0.004, -0.002))
+    pad.rotation.x = 0.35
     m.add(pad)
     for (const side of [-1, 1]) {
       // Nostrils: little commas angled down and out, a darker shade of the nose.
-      const nostril = part(sphere, new THREE.Color(noseColor).multiplyScalar(0.45).getHex(), [0.003, 0.006, 0.002], at(side * 0.009, -0.003, 0.003))
+      const nostril = part(sphere, new THREE.Color(noseColor).multiplyScalar(0.45).getHex(), [0.003, 0.006, 0.002], at(side * 0.01, 0.001, 0.001))
       nostril.rotation.z = side * 0.6
       m.add(nostril)
       // The split upper lip: a faint crease curving out each side.
@@ -223,12 +227,12 @@ export class PigModel {
     // Ears: oval petals rising from the top of the head at the back, leaning out, the top folding
     // over; coat-coloured outside and pink inside (facing forwards). Turned in pose().
     for (const side of [-1, 1]) {
-      const d = dir(side * 0.62, 0.72, 0.3)
+      const d = dir(side * 0.7, 0.62, 0.32)
       const ear = new THREE.Group()
       ear.position.copy(surface(HEAD, d, 0.92))
       const color = look.pattern === 'himalayan' ? patch : coatAt(coat.head, d, look.breed === 'skinny' ? 0.95 : 0.8)
       const inner = look.pattern === 'himalayan' ? patch : PINK
-      const geo = earGeo(1.1 + rand() * 0.6)
+      const geo = earGeo(1.6 + rand() * 0.6)
       ear.add(new THREE.Mesh(geo, sideMat(color, THREE.FrontSide)), new THREE.Mesh(geo, sideMat(inner, THREE.BackSide)))
       h.add(ear)
       this.ears.push(ear)
@@ -453,7 +457,7 @@ export class PigModel {
       const side = i ? 1 : -1
       const flick = (tt + i * 1.7) % 4.3 < 0.16 ? Math.sin((((tt + i * 1.7) % 4.3) / 0.16) * Math.PI) * 0.6 : 0
       // Leaning out to the side (more when flopped, less when perked), turned to face forward and out.
-      ear.rotation.set(-0.25 - (earFlop - 1) * 0.3 + flick, -side * 0.5, -side * (0.75 + (earFlop - 1) * 0.5))
+      ear.rotation.set(-0.3 - (earFlop - 1) * 0.3 + flick, -side * 0.5, -side * (1.0 + (earFlop - 1) * 0.5))
     })
     this.shadow.visible = state !== 'held' && state !== 'carried'
     this.shadow.scale.set(0.3 - y * 0.3, (0.42 - y * 0.4) * stretch, 1)

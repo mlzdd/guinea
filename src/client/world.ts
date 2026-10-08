@@ -64,7 +64,7 @@ const speckle = (g: CanvasRenderingContext2D, s: number, n: number, colors: stri
   }
 }
 
-const grassTex = canvasTexture(
+export const grassTex = canvasTexture(
   256,
   (g, s) => {
     g.fillStyle = '#6fb04a'
@@ -75,7 +75,7 @@ const grassTex = canvasTexture(
   40,
 )
 
-const strawTex = canvasTexture(
+export const strawTex = canvasTexture(
   256,
   (g, s) => {
     g.fillStyle = '#d9b860'
@@ -152,7 +152,7 @@ const soilTex = canvasTexture(
 )
 
 /** Red barn planks, white trim at the top. */
-const barnTex = canvasTexture(
+export const barnTex = canvasTexture(
   128,
   (g, s) => {
     g.fillStyle = '#b8402f'
@@ -168,7 +168,7 @@ const barnTex = canvasTexture(
   1,
 )
 
-const plankTex = canvasTexture(
+export const plankTex = canvasTexture(
   128,
   (g, s) => {
     g.fillStyle = '#b5833f'

@@ -1,4 +1,5 @@
 import { BEDS, BOWLS, HAY_PATCHES, HAY_RACKS, HAY_STACKS, HOPPERS } from './map.ts'
+import type { BoardRow, Placing, Scores } from './show.ts'
 import type { PigLook } from './pigs.ts'
 import { EMOTES, FARMER_COLORS, ISSUES, SQUARE_IDS, UPGRADE_IDS, VEGGIES, type Issue, type SquareId, type Stat, type UpgradeId, type Veg } from './rules.ts'
 
@@ -20,6 +21,8 @@ export type PigState =
   | 'mope'
   /** Being herded: scooting out of a farmer's way. */
   | 'scoot'
+  /** Up on the judging table at the pig show. */
+  | 'show'
   /** Sneaked into a veg patch: squeezing in, munching a bed (it stops growing), or squeezing back out. */
   | 'raid'
   /** Playing in the hut meadow: off to a tunnel and scurrying through it… */
@@ -51,6 +54,22 @@ export interface FarmerSnap {
   sack: boolean
   /** Armfuls of hay in the basket (each takes HAY_SLOTS places). */
   hay: number
+  /** In the show car waiting to go, or at the pig show. */
+  aboard: boolean
+  atShow: boolean
+}
+
+/** The pig show, while it's on: the car waiting, the show itself, or the results. */
+export interface ShowSnap {
+  phase: 'boarding' | 'on' | 'results'
+  /** Ms left of this part (boarding, or the show's time limit, or the results). */
+  left: number
+  /** Everyone who came: which piggy they brought (null to watch), their spot, judged (and the total), and back at their spot. */
+  entrants: { farmer: number; name: string; pig: number | null; spot: number; total: number | null; back: boolean }[]
+  /** The piggy on the judging table, whose it is, and (once the judge is done) the scores. */
+  table: { pig: number; farmer: number; scores: Scores | null } | null
+  /** How many shows each rival (RIVALS order) has won: rosettes on their piggies. */
+  rivalWins: number[]
 }
 
 export interface PigSnap {
@@ -146,6 +165,11 @@ export type ClientMsg =
   | { t: 'diary' }
   /** Pause the farm for everyone (or carry on). */
   | { t: 'pause' }
+  /** At the show car: get in (with the piggy you're holding, or to watch), or get out again. */
+  | { t: 'board' }
+  /** At the show: put your piggy on the judging table, or take it back once it's been judged. */
+  | { t: 'judge' }
+  | { t: 'fetch' }
 
 export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop' | 'fun' | 'job' | 'baby' | 'rain'
 
@@ -189,12 +213,18 @@ export type ServerMsg =
       zoom: number
       /** Who paused the farm (everything stands still till someone carries on), or null. */
       paused: string | null
+      /** The pig show, while it's on. */
+      show: ShowSnap | null
       /** The squares of land the farm owns. */
       land: SquareId[]
       /** The salad platter: veg in it (VEGGIES order), whether tonight's has been served, and bites left on the floor. */
       salad: { veg: number[]; served: boolean; bites: number }
     }
   /** End of a day: how it went and what it earned. */
+  /** You've been driven somewhere (to the pig show, or home): your farmer is now here. */
+  | { t: 'teleport'; x: number; z: number }
+  /** The pig show's results: the placings (best first), and the all-time leaderboard. */
+  | { t: 'showResults'; placings: Placing[]; board: BoardRow[] }
   | { t: 'report'; day: number; lines: { label: string; coins: number }[]; total: number; stars: number; coins: number }
   /** A veg (or hay) was thrown: animate it from `from` to `to` over `ms`. */
   | { t: 'thrown'; by: number; kind: Veg | 'hay'; from: { x: number; z: number }; to: { x: number; z: number }; ms: number }
@@ -276,6 +306,9 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'door':
     case 'diary':
     case 'pause':
+    case 'board':
+    case 'judge':
+    case 'fetch':
     case 'putdown':
     case 'cuddle':
     case 'shoo':

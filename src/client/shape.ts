@@ -28,16 +28,17 @@ export function loaf(d: THREE.Vector3) {
   return v
 }
 
-/** The head: broad at the back, tapering to a rounded point at the nose, which dips a little. */
+/** The head: broad at the back, narrowing to a rounded muzzle with a flattish end. */
 export function headShape(d: THREE.Vector3) {
   const v = d.clone()
   if (v.y < 0) v.y *= 0.85 // a flatter chin
   if (v.z < 0) {
     const front = -v.z
-    v.x *= 1 - 0.36 * front * front
-    v.y *= 1 - 0.25 * front * front
-    v.y -= 0.1 * front * front
-    v.z *= 1.12
+    v.x *= 1 - 0.32 * front * front
+    v.y *= 1 - 0.24 * front * front
+    v.y -= 0.06 * front * front
+    // The end of the face is flattened off a little rather than coming to a sharp point.
+    v.z = -front * (1.12 - 0.1 * front * front)
   }
   return v
 }

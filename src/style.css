@@ -63,6 +63,80 @@ kbd {
   z-index: 10;
 }
 
+/* The loading screen between the lobby and the farm. */
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+  background: radial-gradient(circle at 50% 35%, #c9f08a, #6fb04a 60%, #3f7a2c);
+  transition: opacity 0.5s ease-out;
+}
+
+#loading[hidden] {
+  display: none;
+}
+
+#loading.done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#loading h1 {
+  margin: 0;
+  font-size: clamp(40px, 8vw, 90px);
+  letter-spacing: 2px;
+  text-shadow: 0 6px 0 var(--ink);
+  transform: rotate(-3deg);
+  text-align: center;
+}
+
+#loading h1 span {
+  color: var(--sun);
+  -webkit-text-stroke: 3px var(--ink);
+}
+
+#loading .loading-pig {
+  font-size: 64px;
+  animation: loading-hop 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes loading-hop {
+  from {
+    transform: translateY(0) rotate(-6deg);
+  }
+  to {
+    transform: translateY(-18px) rotate(6deg);
+  }
+}
+
+#loading .loading-track {
+  width: min(420px, 80vw);
+  height: 18px;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 35%);
+  overflow: hidden;
+}
+
+#loading-bar {
+  width: 0;
+  height: 100%;
+  background: repeating-linear-gradient(45deg, var(--sun), var(--sun) 10px, #f7d774 10px, #f7d774 20px);
+  transition: width 0.25s ease-out;
+}
+
+#loading-text {
+  margin: 0;
+  font-size: 20px;
+  text-shadow: 0 2px 0 var(--ink);
+}
+
 #lobby h1 {
   margin: 0;
   font-size: clamp(44px, 9vw, 110px);
@@ -1008,6 +1082,162 @@ kbd {
   border-radius: 18px;
   box-shadow: 0 6px 0 var(--ink);
   pointer-events: auto;
+}
+
+/* The pig show: the judging card (top right), and the results (in the middle, like the report). */
+#judging {
+  position: absolute;
+  top: 80px;
+  right: 16px;
+  width: 300px;
+  padding: 10px 14px;
+  color: var(--ink);
+  text-shadow: none;
+  background: var(--cream);
+  border: 4px solid var(--ink);
+  border-radius: 16px;
+  box-shadow: 0 5px 0 var(--ink);
+}
+
+#judging h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+#judging .owner {
+  margin: 0 0 6px;
+  opacity: 0.75;
+}
+
+#judging table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#judging tr {
+  opacity: 0;
+  animation: judged 0.3s ease-out forwards;
+}
+
+#judging td {
+  padding: 3px 2px;
+  white-space: nowrap;
+}
+
+#judging td:last-child {
+  text-align: right;
+}
+
+#judging .bar {
+  width: 45%;
+}
+
+#judging .bar i {
+  display: block;
+  height: 10px;
+  background: #f2a630;
+  border-radius: 6px;
+}
+
+#judging .sum td {
+  font-size: 22px;
+  border-top: 2px dashed #e4d8bc;
+}
+
+#judging .looking {
+  white-space: normal;
+}
+
+@keyframes judged {
+  to {
+    opacity: 1;
+  }
+}
+
+#results {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 16px 22px;
+  color: var(--ink);
+  text-shadow: none;
+  background: var(--cream);
+  border: 4px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 0 6px 0 var(--ink);
+  pointer-events: auto;
+  z-index: 4;
+}
+
+#results h3 {
+  margin: 0 0 8px;
+  font-size: 32px;
+  text-align: center;
+}
+
+#results h4 {
+  margin: 12px 0 4px;
+  font-size: 20px;
+}
+
+#results table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#results td,
+#results th {
+  padding: 4px;
+  border-top: 2px dashed #e4d8bc;
+  text-align: left;
+}
+
+#results .placings td:first-child {
+  width: 40px;
+  font-size: 22px;
+}
+
+#results .placings td:last-child {
+  text-align: right;
+  font-size: 20px;
+}
+
+#results tr.farm {
+  background: #fff1c4;
+}
+
+#results tr.me td {
+  font-weight: bold;
+}
+
+#results .ours {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: #fff1c4;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+#results .buttons {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+#results button {
+  font: inherit;
+  font-size: 17px;
+  padding: 4px 12px;
+  color: var(--ink);
+  background: var(--sun);
+  border: 3px solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 0 2px 0 var(--ink);
+  cursor: pointer;
 }
 
 #shop h3,

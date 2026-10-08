@@ -46,6 +46,8 @@ import type { Net } from './net.ts'
 import { PigModel } from './pig.ts'
 import { VEG_ICON, VEG_LABEL, makeVeg } from './veg.ts'
 import { World, makeHay } from './world.ts'
+import { ShowHall } from './showhall.ts'
+import { CAR_FARM, CAR_REACH, TABLE_H, TABLE_REACH, TABLE_SPOT } from '../core/show.ts'
 
 /** `selected` for the hay slot (after the veg). */
 const HAY_SLOT = VEGGIES.length
@@ -133,10 +135,16 @@ interface Action {
   d: number
 }
 
+const nextFrame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+
 export class Game {
   private readonly renderer: THREE.WebGLRenderer
   private readonly camera = new THREE.PerspectiveCamera(45, 1, 0.5, 300)
   private readonly world = new World()
+  /** The pig show's barn, rivals and car. */
+  private readonly hall: ShowHall
+  /** What the judge was last seen doing (for the judge's bubbles and the judging card). */
+  private judging = ''
   private readonly bubbles: Bubbles
   private readonly hud = new Hud()
   private readonly input: Input
@@ -180,6 +188,7 @@ export class Game {
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.bubbles = new Bubbles(this.world.scene)
+    this.hall = new ShowHall(this.world.scene)
     this.input = new Input(canvas)
     // A click does what E would; with nothing to do, it throws.
     this.input.onClick = () => {
@@ -207,11 +216,36 @@ export class Game {
     this.resize()
   }
 
-  start(net: Net, id: number, looks: PigLook[]) {
+  /**
+   * Gets everything ready behind the loading screen, a bit at a time so the screen can show how it's going: the
+   * piggies (a couple per frame), then (once the first snapshot is in) everything placed, and the shaders compiled so
+   * the first real frame doesn't stall. `progress` gets 0..1 and what's happening.
+   */
+  async load(net: Net, id: number, looks: PigLook[], progress: (k: number, text: string) => void) {
     this.net = net
     this.myId = id
     this.looks = []
-    for (const look of looks) this.setLook(look)
+    for (let i = 0; i < looks.length; i++) {
+      this.setLook(looks[i])
+      if (i % 2 === 1) {
+        progress(0.3 + (0.5 * (i + 1)) / looks.length, `Fluffing up the piggies… ${i + 1}/${looks.length}`)
+        await nextFrame()
+      }
+    }
+  }
+
+  /** Once the first snapshot's in: place everything, compile the shaders, draw a frame. */
+  async warmUp() {
+    for (let i = 0; i < 120 && !this.snap; i++) await nextFrame()
+    this.frame(0)
+    await this.renderer.compileAsync(this.world.scene, this.camera)
+    this.frame(0)
+    await nextFrame()
+  }
+
+  /** Off we go: the HUD and the main loop. */
+  run() {
+    this.hud.show()
     let last = performance.now()
     const frame = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
@@ -331,6 +365,15 @@ export class Game {
         if (v) this.bubbles.say(v.model.root, pickOne(['purrrr ♥', 'chutt chutt ♥', 'purr purr ♥']), 'love', 0.7)
         return
       }
+      case 'teleport': {
+        // Driven to the show, or home: straight there, camera and all.
+        Object.assign(this.me, { x: msg.x, z: msg.z, y: 0, vx: 0, vy: 0, vz: 0 })
+        this.camTarget.set(msg.x, 0.8, msg.z)
+        return
+      }
+      case 'showResults':
+        this.hud.showShowResults(msg, this.myName)
+        return
       case 'report':
         this.hud.showReport(msg, () => this.hud.toggleShop(true))
         this.hud.alert('day', `🪙 Day ${msg.day} earned the farm ${msg.total} coins`)
@@ -514,6 +557,7 @@ export class Game {
       this.hud.toggleDiary()
       if (this.hud.diaryOpen) this.askDiary()
     } else if (code === 'Escape') {
+      this.hud.hideShowResults()
       this.hud.toggleShop(false)
       this.hud.toggleDiary(false)
       this.hud.hideReport()
@@ -613,8 +657,10 @@ export class Game {
       return
     }
 
-    // Walk relative to the camera.
-    const mv = this.input.move()
+    // Walk relative to the camera (not while sat in the show car).
+    const aboard = !!this.mySnap()?.aboard
+    const mv = aboard ? { x: 0, y: 0 } : this.input.move()
+    if (aboard) this.jumpQueued = false
     const fwd = facing(this.camYaw)
     const right = { x: Math.cos(this.camYaw), z: -Math.sin(this.camYaw) }
     const dx = right.x * mv.x + fwd.x * mv.y
@@ -631,6 +677,7 @@ export class Game {
     const face = airborne && len > 0 ? { x: dx, z: dz } : { x: this.me.vx, z: this.me.vz }
     if (Math.hypot(face.x, face.z) > 0.3) this.me.yaw = lerpAngle(this.me.yaw, yawTowards({ x: 0, z: 0 }, face), Math.min(1, dt * 12))
     const mine = this.me.model
+    mine.root.visible = !aboard // sat in the show car
     mine.root.position.set(this.me.x, 0, this.me.z)
     mine.root.rotation.y = this.me.yaw
     const basket = this.basket()
@@ -668,6 +715,7 @@ export class Game {
     const inside = isInside(this.me)
     this.world.setCutaway(inside)
     this.world.update(dt, this.camTarget)
+    this.updateShow(dt)
     this.world.setTime(this.snap.time, this.camTarget)
     this.hud.setDarkness(this.world.darkness)
     // Keep the diary fresh while it's open.
@@ -705,6 +753,7 @@ export class Game {
       v.yaw = lerpAngle(v.yaw, s.yaw, k)
       v.model.root.position.set(v.x, 0, v.z)
       v.model.root.rotation.y = v.yaw
+      v.model.root.visible = !s.aboard // sat in the show car
       const top = s.basket.findLastIndex((n) => n > 0)
       const airborne = v.y > groundAt(v) + 0.05
       const used = s.basket.reduce((a, b) => a + b, 0) + s.hay * HAY_SLOTS
@@ -787,11 +836,13 @@ export class Game {
         v.yaw = carrier.yaw + Math.PI / 2
         m.root.position.set(v.x, fox ? 0.25 : Math.max(0, carrier.y - 0.55), v.z)
       } else {
-        const k = Math.min(1, dt * 10)
+        // A long way at once (off to the show and back): straight there.
+        const k = Math.hypot(s.x - v.x, s.z - v.z) > 10 ? 1 : Math.min(1, dt * 10)
         v.x += (s.x - v.x) * k
         v.z += (s.z - v.z) * k
         v.yaw = lerpAngle(v.yaw, s.yaw, Math.min(1, dt * 8))
-        m.root.position.set(v.x, 0, v.z)
+        // Up on the judging table at the show.
+        m.root.position.set(v.x, s.s === 'show' ? TABLE_H : 0, v.z)
       }
       v.speed = v.speed * 0.7 + (Math.hypot(v.x - ox, v.z - oz) / dt) * 0.3
       m.root.rotation.y = v.yaw
@@ -970,9 +1021,16 @@ export class Game {
     const max = this.basketMax()
     const used = count + hay * HAY_SLOTS
     const hayRoom = max - used >= HAY_SLOTS
-    if (holding !== null) {
+    // The show car in the yard, while it waits.
+    const mine = this.mySnap()
+    const car = snap.show?.phase === 'boarding' && !mine?.aboard && !sack ? dist(me, CAR_FARM) : Infinity
+    if (mine?.aboard || mine?.atShow) {
+      best = this.showAction(holding)
+    } else if (holding !== null) {
       best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
+      if (car < CAR_REACH) best = { label: `<b>Take ${this.looks[holding].name} to the pig show 🚗</b>`, msg: { t: 'board' }, d: -1 }
     } else {
+      if (car < CAR_REACH) offer({ label: 'Come and watch the pig show 🚗 (or carry a piggy here to enter it)', msg: { t: 'board' }, d: -1 })
       const door = dist(me, DOOR_MID)
       if (door < REACH + 0.3) offer({ label: snap.door ? 'Open the barn door 🚪' : 'Shut the barn door 🚪', msg: { t: 'door' }, d: door - 0.5 })
       const table = dist(me, SALAD_TABLE)
@@ -1094,6 +1152,49 @@ export class Game {
       }
     }
     this.hud.setPrompt(lines.join('<br>') || null)
+  }
+
+  /** What there is to do in the show car or at the show: the judging table, then back to your spot. */
+  private showAction(holding: number | null): Action | null {
+    const mine = this.mySnap()
+    const show = this.snap!.show
+    if (mine?.aboard) return { label: `Get out of the show car 🚗 (it leaves in ${Math.ceil((show?.left ?? 0) / 1000)}s)`, msg: { t: 'board' }, d: 0 }
+    if (!show) return null
+    if (show.phase === 'results') return { label: '🏆 The results are in! The car home leaves in a moment', msg: null, d: 0 }
+    const e = show.entrants.find((x) => x.farmer === this.myId)
+    if (!e || e.pig === null) return { label: '👀 Enjoy the show! (Next time, carry a piggy to the car to enter it)', msg: null, d: 0 }
+    const name = this.looks[e.pig]?.name ?? 'your piggy'
+    const t = show.table
+    const nearTable = dist(this.me, TABLE_SPOT) < TABLE_REACH
+    if (t?.pig === e.pig) {
+      if (!t.scores) return { label: `🔍 The judge is looking <b>${name}</b> over…`, msg: null, d: 0 }
+      return nearTable ? { label: `Pick <b>${name}</b> up off the table`, msg: { t: 'fetch' }, d: 0 } : { label: `Go and get <b>${name}</b> from the judging table`, msg: null, d: 0 }
+    }
+    if (e.total === null) {
+      if (holding !== e.pig) return { label: `Where’s ${name}?`, msg: null, d: 0 }
+      if (!nearTable) return { label: `Take <b>${name}</b> to the judging table 🏆 (at the top of the hall)`, msg: null, d: 0 }
+      if (t) return { label: `Wait your turn: the judge is looking at ${this.looks[t.pig]?.name ?? 'another piggy'}`, msg: null, d: 0 }
+      return { label: `<b>Put ${name} on the judging table 🏆</b>`, msg: { t: 'judge' }, d: 0 }
+    }
+    if (!e.back) return { label: `${name} scored <b>${e.total}</b>! Now take ${name} back to your spot (number ${e.spot + 1})`, msg: null, d: 0 }
+    const waiting = show.entrants.filter((x) => x.pig !== null && !x.back).map((x) => x.name)
+    return { label: waiting.length ? `Back at your spot. Waiting for ${waiting.join(', ')}… then the results!` : 'Here come the results!', msg: null, d: 0 }
+  }
+
+  /** The show barn and car, the judge's bubbles, and the judging card for whoever's on the table. */
+  private updateShow(dt: number) {
+    const show = this.snap!.show
+    const here = !!this.mySnap()?.atShow
+    this.hall.update(dt, this.clock, show, here)
+    const t = here ? show?.table : null
+    const key = t ? `${t.pig}|${t.scores ? 'done' : 'looking'}` : ''
+    if (key !== this.judging) {
+      this.judging = key
+      if (t && !t.scores) this.bubbles.say(this.hall.judge.root, pickOne(['Hmm…', 'Let’s see…', 'Ooh, now then…']), 'plain', 1.9)
+      if (t?.scores) this.bubbles.say(this.hall.judge.root, pickOne(['Splendid!', 'Very nice!', 'Well now!', 'Lovely piggy!']), 'love', 1.9)
+    }
+    const owner = t ? this.snap!.farmers.find((f) => f.id === t.farmer)?.name : undefined
+    this.hud.showJudging(t ? { pig: this.looks[t.pig]?.name ?? 'A piggy', owner: owner ?? '', scores: t.scores } : null)
   }
 
   private updateArrowsAndTooltip() {

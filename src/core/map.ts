@@ -1,4 +1,5 @@
 import { FARMER_RADIUS, FARMER_ROAM, START_LAND, landLevel, type SquareId, type UpgradeId, type Veg } from './rules.ts'
+import { HALL_BLOCKS, SHOW_AREA } from './show.ts'
 
 /** An axis-aligned rectangle on the ground. Every solid thing is one of these. */
 export interface Rect {
@@ -546,6 +547,12 @@ export function clampTo(p: P, b: Rect, radius: number): void {
 
 /** Where a farmer may stand, with their feet at height `y`: out of everything taller than that. */
 export function settleFarmer(p: P, y = 0): void {
+  // At the pig show (far off down the road): its walls and table, and no further than round the outside of it.
+  if (inRect(p, SHOW_AREA)) {
+    pushOut(p, FARMER_RADIUS, HALL_BLOCKS)
+    clampTo(p, SHOW_AREA, FARMER_RADIUS)
+    return
+  }
   pushOut(p, FARMER_RADIUS, y > 0 ? FARMER_BLOCKS.filter((b) => b.h > y + 0.05) : FARMER_BLOCKS)
   clampTo(p, FARMER_BOUNDS, FARMER_RADIUS)
 }

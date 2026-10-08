@@ -115,14 +115,59 @@ function onMessage(msg: ServerMsg) {
       return // the server closes the socket; onClose reconnects for the next try
     case 'welcome':
       joined = true
-      stopPreview?.()
-      stopPreview = null
-      document.getElementById('lobby')!.hidden = true
-      game = new Game(canvas)
-      game.start(net!, msg.id, msg.pigs)
+      void enterFarm(msg)
       return
   }
+  // While the farm's loading, keep what comes in for when it's ready (only the latest snapshot matters).
+  if (!ready) {
+    if (msg.t === 'snap') {
+      const i = early.findIndex((m) => m.t === 'snap')
+      if (i >= 0) early.splice(i, 1)
+    }
+    early.push(msg)
+    return
+  }
   game?.onMessage(msg)
+}
+
+/** Messages that came in while the farm was loading, and whether it's ready for them. */
+const early: ServerMsg[] = []
+let ready = false
+const nextFrame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+
+/** The loading screen while the farm's built (it takes a few seconds), then the farm. */
+async function enterFarm(msg: Extract<ServerMsg, { t: 'welcome' }>) {
+  const loading = document.getElementById('loading')!
+  const bar = document.getElementById('loading-bar')!
+  const text = document.getElementById('loading-text')!
+  const progress = (k: number, what: string) => {
+    bar.style.width = `${Math.round(k * 100)}%`
+    text.textContent = what
+  }
+  stopPreview?.()
+  stopPreview = null
+  document.getElementById('lobby')!.hidden = true
+  loading.hidden = false
+  progress(0.05, 'Opening the farm gate…')
+  // Let the loading screen show before the heavy lifting.
+  await nextFrame()
+  await nextFrame()
+  progress(0.15, 'Planting the veg, hanging the hay racks…')
+  await nextFrame()
+  game = new Game(canvas)
+  progress(0.3, 'Fluffing up the piggies…')
+  await nextFrame()
+  await game.load(net!, msg.id, msg.pigs, progress)
+  // Catch up on what happened meanwhile, then let things through as they come.
+  for (const m of early.splice(0)) game.onMessage(m)
+  ready = true
+  progress(0.85, 'Lighting the lamps…')
+  await nextFrame()
+  await game.warmUp()
+  progress(1, 'Here we go!')
+  game.run()
+  loading.classList.add('done')
+  setTimeout(() => (loading.hidden = true), 600)
 }
 
 function onClose() {

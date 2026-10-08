@@ -461,10 +461,9 @@ export const RAIN_CHANCE = 0.4
 export const RAIN_MS: [number, number] = [60_000, 120_000]
 export const RAIN_GROW = 1.6
 
-// The pig show: every few days, the best-kept pig wins a rosette and a prize.
+// The pig show (show.ts): every few days a car takes everyone who's coming, and their piggies, to the show.
 export const SHOW_EVERY = 3
-export const SHOW_PRIZE = 30
-/** Days until the next show: 0 means it's judged at the end of today. */
+/** Days until the next show: 0 means it's today. */
 export const daysToShow = (day: number) => (SHOW_EVERY - (day % SHOW_EVERY)) % SHOW_EVERY
 
 /** Local effects for the three land tiers. Rates are per second; distances are metres. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
 import { pigCanStand, BEDS, GARDENS, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
+import { CAR_FARM, JUDGE_MS, RESULTS_MS, RIVALS, SHOW_AT, SHOW_BOARD_MS, SHOW_PRIZES, SPOTS, TABLE_SPOT, total } from '../../src/core/show.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
   CRAVING_HAPPY,
@@ -41,7 +42,6 @@ import {
   OUT_LATE,
   PUP_DAYS,
   RAIN_GROW,
-  SHOW_PRIZE,
   ZOOMIES_MS,
   ZOOM_FILL_MS,
 } from '../../src/core/rules.ts'
@@ -751,24 +751,120 @@ describe('friends', () => {
 })
 
 describe('the pig show', () => {
-  it('every few days the best-kept pig wins a rosette and a prize', () => {
-    const { farm } = setup()
-    // Day 3 ends: show day.
-    farm.t = at(4, 0) + 100
-    for (const p of farm.pigs) Object.assign(p, { happy: 50, hunger: 60 })
+  /** Show day (day 3), just as the car comes, with Ann and Bob on the farm. */
+  const showDay = () => {
+    const { farm, id, me } = setup()
+    const bob = farm.join('Bob', 1)!
+    farm.t = at(3, SHOW_AT) + 100
+    farm.tick(TICK_MS)
+    return { farm, id, me, bob, bobF: farm.farmers.get(bob)! }
+  }
+  /** Ann picks up a very well kept piggy and gets in the car. */
+  const bringStar = (farm: Farm, id: number, me: { x: number; z: number; holding: number | null }) => {
     const star = farm.pigs[5]
-    Object.assign(star, { happy: 100, hunger: 100, issues: 0 })
-    farm.out = []
-    farm.payDay()
-    expect(star.rosettes).toBe(1)
-    expect(report(farm).lines.find((l) => l.label.includes('Pig show'))?.coins).toBe(SHOW_PRIZE)
-    expect(sent(farm).some((m) => m.t === 'pig' && m.look.id === 5 && m.look.rosettes === 1)).toBe(true)
+    Object.assign(star, { hunger: 100, happy: 100, issues: 0, adopter: 'Ann', hayAt: farm.t, state: 'idle', until: Infinity })
+    farm['today'].cuddled.add(star.id)
+    Object.assign(star, { x: CAR_FARM.x + 1, z: CAR_FARM.z })
+    Object.assign(me, { x: CAR_FARM.x + 1.5, z: CAR_FARM.z })
+    farm.handle(id, { t: 'pickup', pig: star.id })
+    expect(me.holding).toBe(star.id)
+    farm.handle(id, { t: 'board' })
+    return star
+  }
 
-    // Not every day.
-    farm.t = at(5, 0) + 100
+  it('on show days the car comes; everyone who gets in goes to the show (with a piggy, or to watch)', () => {
+    const { farm, id, me, bob, bobF } = showDay()
+    expect(farm.snapshot().show?.phase).toBe('boarding')
+    expect(alerts(farm, 'fun').some((a) => a.cheer && a.text.includes('show car'))).toBe(true)
+    const star = bringStar(farm, id, me)
+    expect(farm.snapshot().farmers.find((f) => f.id === id)?.aboard).toBe(true)
+    // Bob comes to watch: everyone's in, so off they go.
+    Object.assign(bobF, { x: CAR_FARM.x - 1, z: CAR_FARM.z })
+    farm.handle(bob, { t: 'board' })
     farm.out = []
-    farm.payDay()
-    expect(report(farm).lines.some((l) => l.label.includes('Pig show'))).toBe(false)
+    farm.tick(TICK_MS)
+    const show = farm.snapshot().show!
+    expect(show.phase).toBe('on')
+    expect(show.entrants.map((e) => [e.name, e.pig])).toEqual([
+      ['Ann', star.id],
+      ['Bob', null],
+    ])
+    expect(farm.out.filter((o) => o.msg.t === 'teleport').map((o) => o.to)).toEqual([id, bob])
+    expect(me.x).toBeGreaterThan(150)
+    expect(star.state).toBe('held')
+    // No show the day before.
+    const other = setup().farm
+    other.t = at(2, SHOW_AT) + 100
+    other.tick(TICK_MS)
+    expect(other.show).toBeNull()
+  })
+
+  it('judged on the table, back to your spot, and once the last piggy is back: results, prizes and the leaderboard', () => {
+    const { farm, id, me, bob, bobF } = showDay()
+    farm.rivalSkill = farm.rivalSkill.map(() => 50) // an easy year
+    const star = bringStar(farm, id, me)
+    Object.assign(bobF, { x: CAR_FARM.x - 1, z: CAR_FARM.z })
+    farm.handle(bob, { t: 'board' })
+    farm.tick(TICK_MS)
+    const coins = farm.coins
+
+    // Onto the judging table.
+    Object.assign(me, { x: TABLE_SPOT.x, z: TABLE_SPOT.z + 1.6 })
+    farm.handle(id, { t: 'putdown' }) // not just anywhere
+    expect(me.holding).toBe(star.id)
+    farm.handle(id, { t: 'judge' })
+    expect(star.state).toBe('show')
+    expect(me.holding).toBeNull()
+    farm.handle(id, { t: 'fetch' }) // not till the judge is done
+    expect(me.holding).toBeNull()
+    run(farm, JUDGE_MS + 100)
+    const scores = farm.snapshot().show!.table!.scores!
+    expect(total(scores)).toBeGreaterThan(85)
+    farm.handle(id, { t: 'fetch' })
+    expect(me.holding).toBe(star.id)
+    expect(farm.snapshot().show!.entrants[0].total).toBe(total(scores))
+
+    // Back to the spot: Ann's was the only piggy, so that's everyone, and out come the results.
+    farm.out = []
+    Object.assign(me, SPOTS[0])
+    run(farm, 200)
+    const results = sent(farm).find((m) => m.t === 'showResults')
+    if (results?.t !== 'showResults') throw new Error('no results')
+    expect(results.placings).toHaveLength(RIVALS.length + 1)
+    expect(results.placings[0]).toMatchObject({ who: 'Ann', pig: star.name, farm: true })
+    expect(star.rosettes).toBe(1)
+    expect(farm.coins).toBe(coins + SHOW_PRIZES[0])
+    expect(results.board[0]).toMatchObject({ who: 'Ann', wins: 1, podiums: 1, shows: 1 })
+    expect(results.board.some((r) => r.who === RIVALS[0].name && r.shows === 1)).toBe(true)
+    expect(farm.snapshot().show!.phase).toBe('results')
+
+    // Then home in the car, piggy and all.
+    run(farm, RESULTS_MS + 100)
+    expect(farm.show).toBeNull()
+    expect(me.atShow).toBe(false)
+    expect(Math.hypot(me.x - CAR_FARM.x, me.z - CAR_FARM.z)).toBeLessThan(5)
+    expect(me.holding).toBe(star.id)
+    // The leaderboard and the rivals are remembered.
+    const again = new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save())))
+    expect(again.showBoard.get('Ann')?.wins).toBe(1)
+    expect(again.rivalSkill).toEqual(farm.rivalSkill)
+    expect(again.showDay).toBe(3)
+  })
+
+  it('goes on without us if nobody gets in the car; going home mid-show brings your piggy home too', () => {
+    const { farm } = showDay()
+    run(farm, SHOW_BOARD_MS + 200)
+    expect(farm.show).toBeNull()
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('went on without us'))).toBe(true)
+    expect([...farm.showBoard.values()].every((r) => !r.farm)).toBe(true)
+
+    const two = showDay()
+    const star = bringStar(two.farm, two.id, two.me)
+    run(two.farm, SHOW_BOARD_MS + 200)
+    expect(two.me.atShow).toBe(true)
+    two.farm.leave(two.id)
+    expect(star.state).not.toBe('held')
+    expect(onFarm(star)).toBe(true)
   })
 })
 

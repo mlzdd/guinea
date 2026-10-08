@@ -60,6 +60,7 @@ import {
 } from './map.ts'
 import { babyLook, makePigLooks, type PigLook } from './pigs.ts'
 import type {
+  ShowSnap,
   AlertKind,
   DiaryRow,
   JobSnap,
@@ -208,7 +209,6 @@ import {
   RAID_SPOOK,
   isSneaky,
   SHOO_COOLDOWN_MS,
-  SHOW_PRIZE,
   SLEEP_SKIP_MS,
   START_COINS,
   STARS,
@@ -241,6 +241,28 @@ import {
   type Veg,
 } from './rules.ts'
 import { facing, yawTowards } from './vec.ts'
+import {
+  ARRIVE,
+  CAR_FARM,
+  CAR_REACH,
+  JUDGE_MS,
+  RESULTS_MS,
+  RIVALS,
+  SHOW_AT,
+  SHOW_BOARD_MS,
+  SHOW_MS,
+  SHOW_PRIZES,
+  SPOTS,
+  SPOT_R,
+  TABLE_REACH,
+  TABLE_SPOT,
+  judge,
+  rivalScores,
+  total,
+  type BoardRow,
+  type Placing,
+  type Scores,
+} from './show.ts'
 
 export interface Pig extends PigLook {
   x: number
@@ -355,6 +377,28 @@ interface Farmer {
   lastZ: number
   vx: number
   vz: number
+  /** In the show car waiting to go, or at the pig show. */
+  aboard: boolean
+  atShow: boolean
+}
+
+/** A farmer at the pig show: the piggy they brought (null: just watching), their spot, its scores, back at the spot. */
+interface Entrant {
+  farmer: number
+  name: string
+  pig: number | null
+  spot: number
+  scores: Scores | null
+  back: boolean
+}
+/** The pig show while it's on: the car waiting, the show, then the results (`until` ends each). */
+interface Show {
+  phase: 'boarding' | 'on' | 'results'
+  until: number
+  started: number
+  entrants: Map<number, Entrant>
+  table: { pig: number; farmer: number; at: number; scores: Scores | null } | null
+  rivals: Scores[]
 }
 
 export interface Outgoing {
@@ -379,6 +423,10 @@ export interface FarmSave {
   diary?: Record<string, Record<string, number>>
   door?: boolean
   zoomMeter?: number
+  /** The pig show: the rivals' skills, the all-time leaderboard, and the day the last one was. */
+  rivalSkill?: number[]
+  showBoard?: BoardRow[]
+  showDay?: number
   salad?: number[]
   saladServed?: boolean
   sacks?: number
@@ -422,7 +470,7 @@ const CALM: PigState[] = ['idle', 'wander', 'graze', 'beg', 'popcorn', 'zoom', '
 const HERDABLE: PigState[] = ['idle', 'wander', 'graze', 'popcorn', 'zoom', 'mope', 'scoot', 'scratch', 'sneeze', 'home']
 /** States that don't get shoved about by other pigs. */
 const SETTLED: PigState[] = ['sleep', 'hide', 'eat']
-const AWAY: PigState[] = ['held', 'carried', 'lost']
+const AWAY: PigState[] = ['held', 'carried', 'lost', 'show']
 /** Food ids of the hoppers come after the bowls. */
 export const HOPPER_ID = BOWLS.length
 /** The served salad platter is a fixed food too, after the hoppers. */
@@ -482,6 +530,13 @@ export class Farm {
   sacks = 1
   /** Who paused the farm: nothing happens (no clock, pigs, crops, foxes) till someone carries on. Not saved. */
   paused: string | null = null
+  /** The pig show, while it's on. */
+  show: Show | null = null
+  /** How well-kept each rival's piggy is (RIVALS order; they drift from show to show), and the all-time leaderboard. */
+  rivalSkill = RIVALS.map((r) => r.skill)
+  showBoard = new Map<string, BoardRow>()
+  /** The last day there was a show (so it's once a show day). */
+  showDay = 0
   /** Armfuls left on the hay table's bale today (a new bale every dawn). */
   bale = BALE_ARMFULS
   /** The last day everyone was reminded to serve the salad. */
@@ -642,6 +697,8 @@ export class Farm {
       holding: null,
       sack: false,
       hay: kept?.hay ?? 0,
+      aboard: false,
+      atShow: false,
       lastShoo: -1e9,
       lastEmote: -1e9,
       lastX: spot.x,
@@ -656,6 +713,7 @@ export class Farm {
   leave(id: number) {
     const f = this.farmers.get(id)
     if (!f) return
+    this.leaveShow(f)
     this.putDown(f)
     if (f.sack) this.sacks++ // the sack goes back in the bin
     this.baskets.set(f.name, { basket: [...f.basket], hay: f.hay })
@@ -732,7 +790,15 @@ export class Farm {
         return
       }
       case 'putdown':
+        // Not at the show: there's nowhere to put a piggy down but the judging table.
+        if (f.atShow) return
         return this.putDown(f)
+      case 'board':
+        return this.board(f)
+      case 'judge':
+        return this.toTable(f)
+      case 'fetch':
+        return this.fromTable(f)
       case 'cuddle': {
         const p = f.holding === null ? null : this.pigs[f.holding]
         if (!p || this.t - p.cuddleAt < CUDDLE_COOLDOWN_MS) return
@@ -1119,6 +1185,7 @@ export class Farm {
     // An hour's grace after dark to get everyone in; anyone still out after that counts.
     if (this.night && this.dayTime >= OUT_LATE) for (const p of this.pigs) if (!isInside(p) && !AWAY.includes(p.state)) this.today.outAtNight.add(p.id)
     this.skipNight()
+    this.updateShow()
 
     for (const food of this.foods.values()) {
       if (!food.landed && this.t >= food.landAt) {
@@ -2260,25 +2327,11 @@ export class Farm {
       { label: `🥗 Salad night (${d.salad} kinds of veg)`, coins: d.salad ? PAY.salad + d.salad * PAY.saladKind : 0 },
       { label: `🌾 Hay munchers (${d.hay.size})`, coins: d.hay.size * PAY.hay },
     ].filter((l) => l.coins !== 0)
-    // Every few days, the pig show: the best-kept piggy wins a rosette and a prize.
-    const winner = daysToShow(this.day - 1) === 0 ? this.bestInShow(here) : null
-    if (winner) {
-      winner.rosettes = (winner.rosettes ?? 0) + 1
-      this.pigChanged(winner)
-      lines.push({ label: `🏆 Pig show: ${winner.name} won Best in Show!`, coins: SHOW_PRIZE })
-      this.alert('fun', `🏆 ${winner.name}${winner.adopter ? ` (${winner.adopter}’s piggy)` : ''} won Best in Show!`, true)
-    }
     const total = Math.max(0, lines.reduce((a, l) => a + l.coins, 0))
     const stars = 1 + STARS.filter((s) => total >= s).length
     this.coins += total
     this.out.push({ to: 'all', msg: { t: 'report', day: this.day - 1, lines, total, stars, coins: this.coins } })
     this.newDay()
-  }
-
-  /** Happy, well fed, healthy and fussed over. */
-  private bestInShow(pigs: Pig[]): Pig | null {
-    const score = (p: Pig) => p.happy + p.hunger * 0.3 + (p.issues ? 0 : 20) + (this.today.cuddled.has(p.id) ? 15 : 0) + (p.age === 0 ? -50 : 0)
-    return pigs.reduce<Pig | null>((best, p) => (!best || score(p) > score(best) ? p : best), null)
   }
 
   /** Dawn: a new craving, new jobs, maybe rain. */
@@ -2301,7 +2354,7 @@ export class Farm {
     } else {
       this.rainFrom = this.rainTo = 0
     }
-    if (daysToShow(this.day) === 0) this.alert('fun', '🏆 Pig show tonight! Feed, cuddle and health-check everyone: the best-kept piggy wins')
+    if (daysToShow(this.day) === 0) this.alert('fun', '🏆 Pig show today! The car comes mid-morning: feed, cuddle and health-check your best piggy')
   }
 
   /** Everyone in the barn fast asleep, nothing prowling: why wait? On to morning. */
@@ -2382,6 +2435,238 @@ export class Farm {
     return pups
   }
 
+  // ---------------------------------------------------------------- the pig show
+
+  /** The car comes on show days; then boarding, the show and the results each run their course. */
+  private updateShow() {
+    const s = this.show
+    if (!s) {
+      if (daysToShow(this.day) === 0 && this.showDay !== this.day && this.dayTime >= SHOW_AT && this.dayTime < NIGHT_START - 0.15) {
+        this.showDay = this.day
+        this.show = { phase: 'boarding', until: this.t + SHOW_BOARD_MS, started: this.t, entrants: new Map(), table: null, rivals: [] }
+        this.alert('fun', '🚗 The show car’s here! Carry your best piggy to it in the yard (or just come and watch)', true)
+      }
+      return
+    }
+    if (s.phase === 'boarding') {
+      const everyone = this.farmers.size > 0 && [...this.farmers.values()].every((f) => f.aboard)
+      if (this.t >= s.until || everyone) this.departShow(s)
+      return
+    }
+    if (s.phase === 'on') {
+      // The judge looks the piggy on the table over.
+      const t = s.table
+      if (t && !t.scores && this.t >= t.at + JUDGE_MS) {
+        t.scores = this.judgePig(this.pigs[t.pig])
+        const e = s.entrants.get(t.farmer)
+        if (e) e.scores = t.scores
+        const p = this.pigs[t.pig]
+        this.alert('fun', `🔍 The judge gives ${p.name} ${total(t.scores)} out of 100!`)
+      }
+      // Back at their spots with their (judged) piggies.
+      for (const e of s.entrants.values()) {
+        const f = this.farmers.get(e.farmer)
+        if (e.scores && !e.back && f && e.pig !== null && f.holding === e.pig && dist(f, SPOTS[e.spot]) < SPOT_R) e.back = true
+      }
+      // Once the last piggy's been judged and taken back (or time's up; or nobody brought one and they've had a look).
+      const showing = [...s.entrants.values()].filter((e) => e.pig !== null)
+      const done = showing.length ? showing.every((e) => e.back) : this.t >= s.started + 20_000
+      if (done || this.t >= s.until) this.showResults(s)
+      return
+    }
+    if (this.t >= s.until) this.endShow()
+  }
+
+  /** At the show car: in (with the piggy you're holding, or to watch), or out again. */
+  private board(f: Farmer) {
+    const s = this.show
+    if (!s || s.phase !== 'boarding' || f.atShow || f.sack || dist(f, CAR_FARM) > CAR_REACH) return
+    f.aboard = !f.aboard
+    if (f.aboard) {
+      const p = f.holding === null ? null : this.pigs[f.holding]
+      this.alert('fun', p ? `🚗 ${f.name} is taking ${p.name} to the pig show!` : `🚗 ${f.name} is coming to watch the pig show`)
+    }
+  }
+
+  /** Off to the show: everyone in the car to their spots in the show barn. */
+  private departShow(s: Show) {
+    const going = [...this.farmers.values()].filter((f) => f.aboard)
+    if (!going.length) {
+      // Nobody came: it goes on without the farm.
+      this.show = null
+      const scores = RIVALS.map((_, i) => rivalScores(this.rivalSkill[i], this.rand))
+      const placings = this.place([], scores)
+      this.alert('fun', `🏆 The pig show went on without us: ${placings[0].who}’s ${placings[0].pig} won`)
+      return
+    }
+    s.phase = 'on'
+    s.started = this.t
+    s.until = this.t + SHOW_MS
+    s.rivals = RIVALS.map((_, i) => rivalScores(this.rivalSkill[i], this.rand))
+    going.forEach((f, i) => {
+      f.aboard = false
+      f.atShow = true
+      s.entrants.set(f.id, { farmer: f.id, name: f.name, pig: f.holding, spot: i % SPOTS.length, scores: null, back: false })
+      this.teleport(f, { x: ARRIVE.x + ((i % 4) - 1.5) * 1.2, z: ARRIVE.z + Math.floor(i / 4) * 1.2 })
+    })
+    this.alert('fun', '🚗 Off to the pig show! Take your piggy to the judging table, then back to your spot', true)
+  }
+
+  /** Puts a farmer somewhere else (their browser moves them there too). */
+  private teleport(f: Farmer, at: P) {
+    f.x = f.lastX = at.x
+    f.z = f.lastZ = at.z
+    f.y = 0
+    this.out.push({ to: f.id, msg: { t: 'teleport', x: r2(at.x), z: r2(at.z) } })
+  }
+
+  /** Your piggy onto the judging table (when it's free and yours hasn't been judged yet). */
+  private toTable(f: Farmer) {
+    const s = this.show
+    const e = s?.entrants.get(f.id)
+    if (!s || s.phase !== 'on' || !e || e.pig === null || e.scores || s.table || f.holding !== e.pig || dist(f, TABLE_SPOT) > TABLE_REACH) return
+    const p = this.pigs[e.pig]
+    f.holding = null
+    p.heldBy = null
+    p.state = 'show'
+    p.x = TABLE_SPOT.x
+    p.z = TABLE_SPOT.z
+    p.yaw = Math.PI / 2
+    s.table = { pig: p.id, farmer: f.id, at: this.t, scores: null }
+  }
+
+  /** Your piggy back off the table, once the judge is done. */
+  private fromTable(f: Farmer) {
+    const t = this.show?.table
+    if (!t || !t.scores || t.farmer !== f.id || f.holding !== null || dist(f, TABLE_SPOT) > TABLE_REACH) return
+    const p = this.pigs[t.pig]
+    p.state = 'held'
+    p.heldBy = f.id
+    f.holding = p.id
+    this.show!.table = null
+  }
+
+  /** What the judge makes of a farm piggy. */
+  private judgePig(p: Pig): Scores {
+    return judge({
+      hunger: p.hunger,
+      happy: p.happy,
+      issues: bits(p.issues),
+      cuddled: this.today.cuddled.has(p.id),
+      adopted: !!p.adopter,
+      poorly: poorly(p),
+      adult: p.age > 0,
+      hay: this.t - p.hayAt < dayLength(this.day),
+      rosettes: p.rosettes ?? 0,
+      whim: this.rand() * 2 - 1,
+    })
+  }
+
+  /** Everyone placed (best first), the leaderboard brought up to date, and the rivals' piggies a bit better or worse. */
+  private place(farm: Placing[], rivals: Scores[]): Placing[] {
+    const all = [
+      ...farm,
+      ...rivals.map((scores, i): Placing => ({ who: RIVALS[i].name, pig: RIVALS[i].pig, pigId: null, scores, total: total(scores), farm: false })),
+    ].sort((a, b) => b.total - a.total)
+    all.forEach((pl, rank) => {
+      const row = this.showBoard.get(pl.who) ?? { who: pl.who, farm: pl.farm, shows: 0, wins: 0, podiums: 0, best: { pig: pl.pig, total: 0 } }
+      row.shows++
+      if (rank === 0) row.wins++
+      if (rank < 3) row.podiums++
+      if (pl.total > row.best.total) row.best = { pig: pl.pig, total: pl.total }
+      this.showBoard.set(pl.who, row)
+    })
+    // The rivals keep at it: a little better or worse each time (the also-rans try harder).
+    RIVALS.forEach((rv, i) => {
+      const rank = all.findIndex((pl) => pl.who === rv.name)
+      this.rivalSkill[i] = Math.max(45, Math.min(96, this.rivalSkill[i] + this.between(-2.5, 2.5) + (rank >= 3 ? 1 : -0.5)))
+    })
+    return all
+  }
+
+  /** The results: placings, prizes for the top three farm piggies (a rosette for a winner), and the leaderboard. */
+  private showResults(s: Show) {
+    const farm = [...s.entrants.values()]
+      .filter((e) => e.scores && e.pig !== null)
+      .map((e): Placing => ({ who: e.name, pig: this.pigs[e.pig!].name, pigId: e.pig, scores: e.scores!, total: total(e.scores!), farm: true }))
+    const placings = this.place(farm, s.rivals)
+    let won = 0
+    placings.forEach((pl, rank) => {
+      if (!pl.farm || rank >= SHOW_PRIZES.length) return
+      won += SHOW_PRIZES[rank]
+      if (rank === 0 && pl.pigId !== null) {
+        const p = this.pigs[pl.pigId]
+        p.rosettes = (p.rosettes ?? 0) + 1
+        this.pigChanged(p)
+      }
+    })
+    this.coins += won
+    const board = [...this.showBoard.values()].sort((a, b) => b.wins - a.wins || b.podiums - a.podiums || b.best.total - a.best.total).slice(0, 12)
+    this.out.push({ to: 'all', msg: { t: 'showResults', placings, board } })
+    const best = placings[0]
+    this.alert(
+      'fun',
+      best.farm ? `🏆 ${best.pig} (${best.who}’s piggy) won Best in Show! +${won} 🪙` : `🏆 ${best.who}’s ${best.pig} won Best in Show${won ? `. Our prizes: +${won} 🪙` : ''}`,
+      true,
+    )
+    s.phase = 'results'
+    s.until = this.t + RESULTS_MS
+  }
+
+  /** Home time: everyone at the show back to the farm, piggies too. */
+  private endShow() {
+    const s = this.show
+    this.show = null
+    let i = 0
+    for (const f of this.farmers.values()) {
+      if (!f.atShow) continue
+      f.atShow = false
+      this.teleport(f, { x: CAR_FARM.x + 2 + (i % 4) * 1.1, z: CAR_FARM.z + 1.5 + Math.floor(i / 4) * 1.1 })
+      i++
+    }
+    // A piggy still on the table goes home with the car.
+    if (s?.table) this.homeFromShow(this.pigs[s.table.pig])
+  }
+
+  /** A farmer leaving the game: out of the car, and their piggy (and they) home from the show. */
+  private leaveShow(f: Farmer) {
+    f.aboard = false
+    const s = this.show
+    if (!f.atShow || !s) return
+    f.atShow = false
+    if (f.holding !== null) {
+      const p = this.pigs[f.holding]
+      f.holding = null
+      p.heldBy = null
+      this.homeFromShow(p)
+    }
+    if (s.table?.farmer === f.id) {
+      this.homeFromShow(this.pigs[s.table.pig])
+      s.table = null
+    }
+    s.entrants.delete(f.id)
+  }
+
+  /** A piggy back from the show, set down by the car in the yard. */
+  private homeFromShow(p: Pig) {
+    p.x = CAR_FARM.x + 1.5
+    p.z = CAR_FARM.z + 1
+    settlePig(p, PIG_RADIUS)
+    this.setState(p, 'idle', 800)
+  }
+
+  private showSnap(): ShowSnap | null {
+    const s = this.show
+    if (!s) return null
+    return {
+      phase: s.phase,
+      left: Math.max(0, s.until - this.t),
+      entrants: [...s.entrants.values()].map((e) => ({ farmer: e.farmer, name: e.name, pig: e.pig, spot: e.spot, total: e.scores ? total(e.scores) : null, back: e.back })),
+      table: s.table && { pig: s.table.pig, farmer: s.table.farmer, scores: s.table.scores },
+      rivalWins: RIVALS.map((r) => this.showBoard.get(r.name)?.wins ?? 0),
+    }
+  }
+
   // ---------------------------------------------------------------- output
 
   /** `cheer`: a celebration (called out in the middle of the screen). */
@@ -2402,6 +2687,8 @@ export class Farm {
       holding: f.holding,
       sack: f.sack,
       hay: f.hay,
+      aboard: f.aboard,
+      atShow: f.atShow,
     }))
     const pigs: PigSnap[] = this.pigs.map((p) => ({
       id: p.id,
@@ -2447,6 +2734,7 @@ export class Farm {
       door: this.doorShut,
       zoom: r2(this.zoomMeter),
       paused: this.paused,
+      show: this.showSnap(),
       land: [...this.land],
       salad: { veg: [...this.salad], served: this.saladServed, bites: this.foods.get(SALAD_ID)!.bites },
     }
@@ -2501,6 +2789,9 @@ export class Farm {
       diary: Object.fromEntries(this.diary),
       door: this.doorShut,
       zoomMeter: r2(this.zoomMeter),
+      rivalSkill: [...this.rivalSkill],
+      showBoard: [...this.showBoard.values()],
+      showDay: this.showDay,
     }
   }
 
@@ -2579,6 +2870,12 @@ export class Farm {
         if (num(bites)) this.foods.get(RACK_ID + i)!.bites = Math.max(0, Math.min(hayRackMax(this.upgrades), bites))
       })
     if (num(s.zoomMeter)) this.zoomMeter = Math.max(0, Math.min(1, s.zoomMeter!))
+    if (Array.isArray(s.rivalSkill)) s.rivalSkill.slice(0, RIVALS.length).forEach((v, i) => num(v) && (this.rivalSkill[i] = Math.max(40, Math.min(98, v))))
+    if (Array.isArray(s.showBoard))
+      for (const row of s.showBoard)
+        if (row && typeof row.who === 'string' && num(row.shows) && num(row.wins) && num(row.podiums) && row.best && typeof row.best.pig === 'string' && num(row.best.total))
+          this.showBoard.set(row.who.slice(0, 24), { who: row.who.slice(0, 24), farm: row.farm === true, shows: row.shows, wins: row.wins, podiums: row.podiums, best: { pig: row.best.pig.slice(0, 24), total: row.best.total } })
+    if (num(s.showDay)) this.showDay = s.showDay!
     // Family and friends must point at real pigs; saves from before friends pair up in twos.
     const n = this.pigs.length
     const old = !this.pigs.some((p) => p.friend !== undefined)

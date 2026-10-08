@@ -23,6 +23,7 @@ import {
   type Veg,
 } from '../core/rules.ts'
 import { VEG_ICON, VEG_LABEL } from './veg.ts'
+import { CATEGORIES, CATEGORY_LABEL, total, type Scores } from '../core/show.ts'
 
 const $ = (id: string) => document.getElementById(id)!
 const css = (c: number) => `#${c.toString(16).padStart(6, '0')}`
@@ -77,6 +78,7 @@ export function mood(p: PigSnap): string {
   if (p.s === 'raid') return 'raiding the veg patch!'
   if (p.s === 'flee' || p.s === 'hide') return 'scared!'
   if (p.s === 'scoot') return 'being herded'
+  if (p.s === 'show') return 'being judged!'
   if (p.s === 'tunnel') return 'playing in the tunnels!'
   if (p.s === 'peek') return 'playing hide and seek'
   if (p.s === 'mope') return p.hunger < 35 ? 'weak with hunger' : p.issues ? 'feeling poorly' : 'glum'
@@ -104,12 +106,17 @@ export class Hud {
   /** Callouts waiting their turn in the middle of the screen, and whether one is showing. */
   private callouts: { title: string; sub: string; style: CalloutStyle }[] = []
   private calling = false
+  private judgingKey = ''
 
   /** A basket slot was clicked (veg index, or VEGGIES.length for the hay). */
   onSlot: (i: number) => void = () => {}
 
-  constructor() {
+  /** Shown once the game's ready (it's built behind the loading screen). */
+  show() {
     $('hud').hidden = false
+  }
+
+  constructor() {
     $('basket').addEventListener('pointerdown', (e) => {
       const slot = (e.target as HTMLElement).closest<HTMLElement>('.slot')
       if (!slot) return
@@ -173,10 +180,10 @@ export class Hud {
     const key = `${craving}|${showIn}|${rain}|${zoom}`
     if (key === this.todayKey) return
     this.todayKey = key
-    const show = showIn === 0 ? 'tonight!' : `in ${showIn} day${showIn > 1 ? 's' : ''}`
+    const show = showIn === 0 ? 'today! (the car comes mid-morning)' : `in ${showIn} day${showIn > 1 ? 's' : ''}`
     $('today').innerHTML =
       `<span title="Treat of the day: they love it extra">🤤 Craving ${VEG_ICON[craving]}</span>` +
-      `<span title="Best-kept piggy wins a rosette and a prize">🏆 Pig show ${show}</span>` +
+      `<span title="Carry your best-kept piggy to the show car: the judge scores it against the other breeders’ piggies">🏆 Pig show ${show}</span>` +
       `<span class="zoom" title="Zoomometer: fills while the piggies are 70%+ happy. Full = ZOOMIES!">🎉 <i><b style="width:${Math.round(zoom * 100)}%"></b></i></span>` +
       (rain ? '<span>🌧️ Raining</span>' : '')
   }
@@ -420,6 +427,58 @@ export class Hud {
 
   hideReport() {
     $('report').hidden = true
+  }
+
+  /** The judging card at the show: whose piggy is on the table, then each thing the judge looked at, then the total. */
+  showJudging(j: { pig: string; owner: string; scores: Scores | null } | null) {
+    const el = $('judging')
+    const key = j ? `${j.pig}|${j.owner}|${j.scores ? total(j.scores) : '…'}` : ''
+    if (key === this.judgingKey) return
+    this.judgingKey = key
+    el.hidden = !j
+    if (!j) return
+    const rows = j.scores
+      ? CATEGORIES.map(
+          (c, i) =>
+            `<tr style="animation-delay:${i * 0.35}s"><td>${CATEGORY_LABEL[c]}</td><td class="bar"><i style="width:${(j.scores![c] / 20) * 100}%"></i></td><td>${j.scores![c].toFixed(0)}</td></tr>`,
+        ).join('') + `<tr class="sum" style="animation-delay:${CATEGORIES.length * 0.35}s"><td>Score</td><td></td><td>${total(j.scores)}<small>/100</small></td></tr>`
+      : '<tr><td class="looking" colspan="3">🔍 The judge is looking closely…</td></tr>'
+    el.innerHTML = `<h3>🏆 Judging <b>${esc(j.pig)}</b></h3><p class="owner">${esc(j.owner)}’s piggy</p><table>${rows}</table>`
+  }
+
+  /** The show's results: the placings (ours picked out), how our piggies scored, and the all-time leaderboard. */
+  showShowResults(r: Extract<ServerMsg, { t: 'showResults' }>, me: string) {
+    const el = $('results')
+    const medal = (i: number) => ['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`
+    const ours = r.placings.filter((p) => p.farm)
+    el.innerHTML = `
+      <h3>🏆 Pig Show Results</h3>
+      <table class="placings">${r.placings
+        .map(
+          (p, i) =>
+            `<tr class="${p.farm ? 'farm' : ''} ${p.who === me ? 'me' : ''}"><td>${medal(i)}</td><td><b>${esc(p.pig)}</b><br><small>${esc(p.who)}</small></td><td>${p.total}</td></tr>`,
+        )
+        .join('')}</table>
+      ${ours
+        .map(
+          (p) =>
+            `<div class="ours"><b>${esc(p.pig)}</b> <small>(${esc(p.who)}, ${medal(r.placings.indexOf(p))})</small><br>${CATEGORIES.map((c) => `${CATEGORY_LABEL[c]} <b>${p.scores[c].toFixed(0)}</b>`).join(' · ')}</div>`,
+        )
+        .join('')}
+      <h4>All-time leaderboard</h4>
+      <table class="board"><tr><th></th><th>🏆</th><th>🏅</th><th>Shows</th><th>Best</th></tr>${r.board
+        .map(
+          (b) =>
+            `<tr class="${b.farm ? 'farm' : ''}"><td>${esc(b.who)}</td><td>${b.wins}</td><td>${b.podiums}</td><td>${b.shows}</td><td><small>${esc(b.best.pig)} ${b.best.total}</small></td></tr>`,
+        )
+        .join('')}</table>
+      <div class="buttons"><button id="rs-ok">Brilliant!</button></div>`
+    el.hidden = false
+    el.querySelector('#rs-ok')!.addEventListener('click', () => (el.hidden = true))
+  }
+
+  hideShowResults() {
+    $('results').hidden = true
   }
 
   setPrompt(text: string | null) {
