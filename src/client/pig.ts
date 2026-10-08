@@ -10,12 +10,22 @@ const sphere = new THREE.SphereGeometry(1, 14, 10)
 const blob = new THREE.CircleGeometry(1, 16)
 const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false })
 /** The body (in the body group) and head (in the head group). */
-const BODY: Ellipsoid = { c: [0, 0.18, 0.03], r: [0.22, 0.19, 0.3], warp: loaf }
-const HEAD: Ellipsoid = { c: [0, 0, -0.04], r: [0.155, 0.14, 0.165], warp: headShape }
+const BODY: Ellipsoid = { c: [0, 0.2, 0.04], r: [0.23, 0.215, 0.29], warp: loaf }
+/** The head sits this much higher than the poses say (big head, level with the top of the body: no neck). */
+const HEAD_LIFT = 0.04
+/** And this far forward of the body's middle. */
+const HEAD_Z = -0.23
+/**
+ * The head's always tipped nose-down (radians, between these for each pig): the muzzle points down and forward, so from
+ * the front the face is a teardrop, wide at the crown (ears, eyes) narrowing to the nose at the bottom.
+ */
+const HEAD_TILT: [number, number] = [0.28, 0.52]
+/** How pronounced the ridge of the nose and how far the cheeks pull in (see headShape), between these for each pig. */
+const RIDGE: [number, number] = [0.45, 0.8]
+const CHEEKS: [number, number] = [0.3, 0.46]
 /** Fills in where the head meets the body (in the body group), so it's one fluffy shape, no neck. */
-const NECK: Ellipsoid = { c: [0, 0.2, -0.19], r: [0.18, 0.155, 0.13] }
+const NECK: Ellipsoid = { c: [0, 0.23, -0.16], r: [0.175, 0.165, 0.13] }
 const bodyGeo = shapedSphere(loaf)
-const headGeo = shapedSphere(headShape, 28, 18)
 const neckGeo = shapedSphere((d) => d.clone(), 24, 16)
 /** Feet: front pair under the chin, back pair under the hips. */
 const FEET: [number, number][] = [
@@ -24,41 +34,97 @@ const FEET: [number, number][] = [
   [-0.09, 0.13],
   [0.09, 0.13],
 ]
-const EYE_Y = 0.03
+const EYE_Y = 0.036
 const PINK = 0xf3b3b0
 const DARK_EYE = 0x161012
 const RUBY_EYE = 0x6e0d1a
-/** A guinea pig's nose: dusky pink, not bubblegum. */
-const NOSE_PINK = 0xd59a94
+/** A guinea pig's nose: dark brown on a dark face, a dusky rose-brown on a light one. */
+const NOSE_DARK = 0x3a2a27
+const NOSE_LIGHT = 0xb47c77
+/** The nose shape: a rounded triangle, wider at the top, facing −Z (out of the face). */
+const noseGeo = (() => {
+  const w = 0.016
+  const h = 0.011
+  const s = new THREE.Shape()
+  s.moveTo(0, h)
+  s.quadraticCurveTo(w, h, w * 0.85, h * 0.2)
+  s.quadraticCurveTo(w * 0.45, -h * 0.75, 0, -h)
+  s.quadraticCurveTo(-w * 0.45, -h * 0.75, -w * 0.85, h * 0.2)
+  s.quadraticCurveTo(-w, h, 0, h)
+  const g = new THREE.ShapeGeometry(s, 10)
+  g.rotateY(Math.PI)
+  // Rounded over the tip of the muzzle: the edges curve back, the middle's the front-most point.
+  const pos = g.attributes.position
+  for (let i = 0; i < pos.count; i++) pos.setZ(i, pos.getZ(i) + (pos.getX(i) ** 2 + pos.getY(i) ** 2) * 22)
+  g.computeVertexNormals()
+  return g
+})()
 /** Where the face goes on the head, as directions from its middle. */
 const dir = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).normalize()
-const EYE = (side: number) => surface(HEAD, dir(side * 0.66, 0.4, -0.6), 0.94)
-/** Where the whiskers grow, either side of the snout. */
-const SNOUT = (side: number) => surface(HEAD, dir(side * 0.32, -0.16, -0.92), 0.97)
-const NOSE = surface(HEAD, dir(0, 0.06, -1), 1.0)
-/** The point on the front of the face at (x, y) in the head group. */
-function onFace(x: number, y: number) {
-  const d = new THREE.Vector3(0, 0, -1)
-  for (let i = 0; i < 12; i++) {
-    const p = surface(HEAD, d)
-    d.x += ((x - p.x) / HEAD.r[0]) * 0.8
-    d.y += ((y - p.y) / HEAD.r[1]) * 0.8
-    d.z = -1
-  }
-  return surface(HEAD, d.normalize())
+
+/**
+ * A head shape and where its face goes: the eyes, the whisker roots either side of the snout, the nose, any point on
+ * the front of the face, and the bits hair keeps off. Shared by every pig with the same ridge and cheeks.
+ */
+interface Face {
+  head: Ellipsoid
+  geo: THREE.BufferGeometry
+  eye: (side: number) => THREE.Vector3
+  snout: (side: number) => THREE.Vector3
+  nose: THREE.Vector3
+  /** The point on the front of the face at (x, y) in the head group. */
+  on: (x: number, y: number) => THREE.Vector3
+  /** Turns something facing −Z to lie flat on the front of the face at (x, y). */
+  turn: (x: number, y: number) => THREE.Quaternion
+  bare: { at: THREE.Vector3; r: number }[]
 }
-/** Bits of the face that hair keeps off: the eyes, and the nose and mouth. */
-const FACE = [
-  { at: EYE(-1), r: 0.055 },
-  { at: EYE(1), r: 0.055 },
-  { at: NOSE.clone().setY(NOSE.y - 0.015), r: 0.05 },
-]
+const faces = new Map<string, Face>()
+function faceFor(ridge: number, cheeks: number): Face {
+  const key = `${ridge}|${cheeks}`
+  const cached = faces.get(key)
+  if (cached) return cached
+  const head: Ellipsoid = { c: [0, 0, -0.04], r: [0.16, 0.16, 0.17], warp: headShape(ridge, cheeks) }
+  const eye = (side: number) => surface(head, dir(side * 0.68, 0.52, -0.46), 0.92)
+  const nose = surface(head, dir(0, 0, -1), 1.0)
+  const on = (x: number, y: number) => {
+    const d = new THREE.Vector3(0, 0, -1)
+    for (let i = 0; i < 12; i++) {
+      const p = surface(head, d)
+      d.x += ((x - p.x) / head.r[0]) * 0.8
+      d.y += ((y - p.y) / head.r[1]) * 0.8
+      d.z = -1
+    }
+    return surface(head, d.normalize())
+  }
+  const face: Face = {
+    head,
+    geo: shapedSphere(head.warp!, 28, 18),
+    eye,
+    snout: (side) => surface(head, dir(side * 0.32, -0.16, -0.92), 0.97),
+    nose,
+    on,
+    turn: (x, y) => {
+      const e = 0.004
+      const p = on(x, y)
+      const n = new THREE.Vector3().crossVectors(on(x, y + e).sub(p), on(x + e, y).sub(p)).normalize()
+      if (n.z > 0) n.negate()
+      return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), n)
+    },
+    bare: [
+      { at: eye(-1), r: 0.055 },
+      { at: eye(1), r: 0.055 },
+      { at: nose.clone().setY(nose.y - 0.015), r: 0.05 },
+    ],
+  }
+  faces.set(key, face)
+  return face
+}
 /** Ears, by how far they fold (shared between pigs). */
 const earGeos = new Map<number, THREE.BufferGeometry>()
 const earGeo = (fold: number) => {
   const key = Math.round(fold * 10) / 10
   let g = earGeos.get(key)
-  if (!g) earGeos.set(key, (g = foldedOval(0.095, 0.115, key, 0.35)))
+  if (!g) earGeos.set(key, (g = foldedOval(0.11, 0.13, key, 0.35)))
   return g
 }
 /** One side of an ear: the coat outside (FrontSide), pink inside (BackSide). */
@@ -132,10 +198,21 @@ export class PigModel {
   private readonly baseScale: THREE.Vector3
   /** Sleeps flopped out flat (or else tucked up in a loaf). */
   private readonly flopper: boolean
+  /** How far this one holds its head nose-down, and how floppy its ears are (0..1). */
+  private readonly tilt: number
+  private readonly droop: number
 
   constructor(look: PigLook) {
     const patch = look.coat[1]
     const rand = prng(look.id + 1)
+    // Every piggy's face is its own (but always the same for that piggy): how it holds its head, how pronounced the
+    // ridge of its nose, how full its cheeks, how floppy its ears.
+    const own = prng(look.id * 31 + 7)
+    const between = ([a, b]: [number, number], step: number) => Math.round((a + own() * (b - a)) / step) * step
+    const face = faceFor(between(RIDGE, 0.05), between(CHEEKS, 0.04))
+    const HEAD = face.head
+    this.tilt = between(HEAD_TILT, 0.01)
+    this.droop = own()
     const coat = coatFor(look)
     this.flopper = look.id % 2 === 1
 
@@ -148,11 +225,11 @@ export class PigModel {
     const b = this.body
     b.add(furry(coat.body, bodyGeo, BODY.r, BODY.c))
     b.add(furry(coat.body, neckGeo, NECK.r, NECK.c))
-    this.head.position.set(0, 0.21, -0.22)
+    this.head.position.set(0, 0.21 + HEAD_LIFT, HEAD_Z)
     b.add(this.head)
     const h = this.head
     // The markings are painted into the coat (fur.ts).
-    h.add(furry(coat.head, headGeo, HEAD.r, HEAD.c))
+    h.add(furry(coat.head, face.geo, HEAD.r, HEAD.c))
 
     // Breeds
     if (look.breed === 'abyssinian') {
@@ -160,7 +237,7 @@ export class PigModel {
       const spots = rosetteSpots(rand)
       b.add(rosettes(coat.body, BODY, rand, spots))
       b.add(scruffyHair(coat.body, BODY, rand, { count: 6500, len: 0.08, radius: 0.0026, avoid: spots }))
-      h.add(scruffyHair(coat.head, HEAD, rand, { count: 1000, len: 0.045, radius: 0.0021, bare: FACE, flat: true }))
+      h.add(scruffyHair(coat.head, HEAD, rand, { count: 1000, len: 0.045, radius: 0.0021, bare: face.bare, flat: true }))
     } else if (look.breed === 'peruvian') {
       // Long flowing hair draped down to the ground, and parted on the head.
       b.add(drapedHair(coat.body, BODY, 0.02, rand, { count: 320, zFrom: -0.8, zTo: 1.2, radius: 0.008, rear: 120 }))
@@ -171,7 +248,7 @@ export class PigModel {
       h.add(rosettes(look.pattern === 'self' ? white : coat.head, HEAD, rand, [dir(0, 0.8, -0.6)], 0.5))
     } else if (look.breed === 'skinny') {
       // Bare and wrinkly (fur.ts), with just a fuzzy nose.
-      h.add(scruffyHair(coat.head, HEAD, rand, { count: 220, len: 0.02, radius: 0.0016, flat: true, bare: FACE, from: -0.6, where: (d) => d.z < -0.6 }))
+      h.add(scruffyHair(coat.head, HEAD, rand, { count: 220, len: 0.02, radius: 0.0016, flat: true, bare: face.bare, from: -0.6, where: (d) => d.z < -0.6 }))
     }
     this.baseScale = look.breed === 'teddy' ? new THREE.Vector3(1.08, 1.05, 1) : new THREE.Vector3(1, 1, 1)
 
@@ -183,7 +260,7 @@ export class PigModel {
     for (const side of [-1, 1]) {
       // Whiskers fan out from the sides of the snout, curving back a little.
       for (let k = 0; k < 4; k++) {
-        const root = SNOUT(side).add(new THREE.Vector3(0, 0.006 - k * 0.005, 0))
+        const root = face.snout(side).add(new THREE.Vector3(0, 0.006 - k * 0.005, 0))
         const spread = (k - 1.5) * 0.035
         paths.push([
           root,
@@ -194,31 +271,49 @@ export class PigModel {
     }
     m.add(whiskers(paths, light ? 0x4a3c34 : 0xe8e2da))
     /** On the face at (x, y) from the nose tip, standing `out` metres proud of it. */
-    const at = (x: number, y: number, out: number) => onFace(NOSE.x + x, NOSE.y + y).add(new THREE.Vector3(0, 0, -out))
-    // The mouth is just creases in the coat's own colour, a shade darker.
-    const crease = new THREE.Color(coatAt(coat.head, dir(0, -0.3, -1))).multiplyScalar(0.6).getHex()
-    const noseColor = look.pattern === 'himalayan' ? patch : NOSE_PINK
-    // The nose pad: soft and flat, wider at the top, tipped down a touch, hardly raised at all.
-    const pad = part(sphere, noseColor, [0.026, 0.014, 0.004], at(0, 0.004, -0.002))
-    pad.rotation.x = 0.35
-    m.add(pad)
+    const NOSE = face.nose
+    const at = (x: number, y: number, out: number) => face.on(NOSE.x + x, NOSE.y + y).add(new THREE.Vector3(0, 0, -out))
+    // The nose: a soft rounded triangle, wider at the top, lying on the face. Dark brown on a dark face, dusky
+    // rose-brown on a light one (himalayans: their dark points).
+    const faceLight = new THREE.Color(coatAt(coat.head, dir(0, 0, -1))).getHSL({ h: 0, s: 0, l: 0 }).l > 0.55
+    const noseColor = look.pattern === 'himalayan' ? patch : faceLight ? NOSE_LIGHT : NOSE_DARK
+    // Whisker pads: the two puffy cheeks of the muzzle either side of the split lip, in the coat's own colour (a touch
+    // lighter), with the nose sat on top of them.
     for (const side of [-1, 1]) {
-      // Nostrils: little commas angled down and out, a darker shade of the nose.
-      const nostril = part(sphere, new THREE.Color(noseColor).multiplyScalar(0.45).getHex(), [0.003, 0.006, 0.002], at(side * 0.01, 0.001, 0.001))
+      const puff = coatAt(coat.head, dir(side * 0.3, -0.2, -0.95))
+      m.add(part(sphere, puff, [0.017, 0.014, 0.0035], at(side * 0.015, -0.018, -0.0005)))
+    }
+    const nose = new THREE.Mesh(noseGeo, mat(noseColor))
+    nose.position.copy(at(0, 0.002, 0.0025))
+    nose.quaternion.copy(face.turn(NOSE.x, NOSE.y + 0.003))
+    m.add(nose)
+    for (const side of [-1, 1]) {
+      // Nostrils: little commas at the top corners, angled down and out, darker still.
+      const nostril = part(sphere, new THREE.Color(noseColor).multiplyScalar(0.4).getHex(), [0.0032, 0.0055, 0.002], at(side * 0.0085, 0.006, 0.0024))
       nostril.rotation.z = side * 0.6
       m.add(nostril)
-      // The split upper lip: a faint crease curving out each side.
-      const line = part(sphere, crease, [0.008, 0.0014, 0.002], at(side * 0.008, -0.03, 0))
-      line.rotation.z = side * 0.35
-      m.add(line)
     }
-    // The groove from the nose down to where the lip splits.
-    m.add(part(sphere, crease, [0.0016, 0.008, 0.002], at(0, -0.02, 0)))
+    // The mouth: a line down from the nose in the crease between the whisker pads, splitting into a little "w" of a
+    // lip along their bottom edges, one smooth stroke each side. Set into the face, following it back under the nose.
+    // In a darker shade of the face's own colour: soft on a light pig, there but subtle on a dark one.
+    const mouth = mat(new THREE.Color(coatAt(coat.head, dir(0, -0.3, -1))).multiplyScalar(faceLight ? 0.62 : 0.45).getHex())
+    for (const side of [-1, 1]) {
+      const curve = new THREE.CatmullRomCurve3(
+        [
+          [0, -0.008, 0.0004],
+          [0, -0.024, 0.0004],
+          [side * 0.007, -0.03, 0.0008],
+          [side * 0.016, -0.031, 0.0008],
+          [side * 0.025, -0.025, 0.0004],
+        ].map(([x, y, out]) => at(x, y, out)),
+      )
+      m.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.0011, 5), mouth))
+    }
 
     // Eyes: round and glossy, set into the sides of the head. Pink-eyed whites and himalayans have ruby eyes.
     const ruby = look.pattern === 'himalayan' || (look.pattern === 'self' && look.coat[0] === COLORS.white)
     for (const side of [-1, 1]) {
-      const eye = part(sphere, eyeMat(ruby ? RUBY_EYE : DARK_EYE), [0.022, EYE_Y, 0.03], EYE(side))
+      const eye = part(sphere, eyeMat(ruby ? RUBY_EYE : DARK_EYE), [0.026, EYE_Y, 0.034], face.eye(side))
       eye.add(part(sphere, 0xffffff, [0.25, 0.22, 0.22], [side * 0.6, 0.4, -0.45]))
       h.add(eye)
       this.eyes.push(eye)
@@ -227,12 +322,13 @@ export class PigModel {
     // Ears: oval petals rising from the top of the head at the back, leaning out, the top folding
     // over; coat-coloured outside and pink inside (facing forwards). Turned in pose().
     for (const side of [-1, 1]) {
-      const d = dir(side * 0.7, 0.62, 0.32)
+      const d = dir(side * 0.8, 0.48, 0.3)
       const ear = new THREE.Group()
       ear.position.copy(surface(HEAD, d, 0.92))
       const color = look.pattern === 'himalayan' ? patch : coatAt(coat.head, d, look.breed === 'skinny' ? 0.95 : 0.8)
       const inner = look.pattern === 'himalayan' ? patch : PINK
-      const geo = earGeo(1.6 + rand() * 0.6)
+      // Floppier ears fold right over.
+      const geo = earGeo(1.4 + this.droop * 1.2)
       ear.add(new THREE.Mesh(geo, sideMat(color, THREE.FrontSide)), new THREE.Mesh(geo, sideMat(inner, THREE.BackSide)))
       h.add(ear)
       this.ears.push(ear)
@@ -444,8 +540,8 @@ export class PigModel {
     b.position.y = y - (feetIn ? 0.01 : 0)
     b.rotation.set(tilt, twist, roll)
     b.scale.set(s.x, s.y * squash, s.z * stretch)
-    h.position.y = headY
-    h.rotation.x = headTilt
+    h.position.y = headY + HEAD_LIFT
+    h.rotation.x = headTilt + this.tilt
     for (const f of feet) f.visible = !feetIn
     for (const e of this.eyes) e.scale.y = EYE_Y * eyesOpen
     // The nose wiggles in little bursts.
@@ -457,7 +553,7 @@ export class PigModel {
       const side = i ? 1 : -1
       const flick = (tt + i * 1.7) % 4.3 < 0.16 ? Math.sin((((tt + i * 1.7) % 4.3) / 0.16) * Math.PI) * 0.6 : 0
       // Leaning out to the side (more when flopped, less when perked), turned to face forward and out.
-      ear.rotation.set(-0.3 - (earFlop - 1) * 0.3 + flick, -side * 0.5, -side * (1.0 + (earFlop - 1) * 0.5))
+      ear.rotation.set(-0.3 - (earFlop - 1) * 0.3 - this.droop * 0.15 + flick, -side * 0.5, -side * (1.0 + this.droop * 0.4 + (earFlop - 1) * 0.5))
     })
     this.shadow.visible = state !== 'held' && state !== 'carried'
     this.shadow.scale.set(0.3 - y * 0.3, (0.42 - y * 0.4) * stretch, 1)

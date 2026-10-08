@@ -1204,7 +1204,19 @@ export class Game {
   private updateShow(dt: number) {
     const show = this.snap!.show
     const here = !!this.mySnap()?.atShow
-    this.hall.update(dt, this.clock, show, here)
+    // Light up where to go next: the table when it's free and my piggy's still to be judged, my spot once it has been.
+    const e = here ? show?.entrants.find((x) => x.farmer === this.myId) : undefined
+    const go =
+      !e || e.pig === null || show?.phase !== 'on'
+        ? null
+        : e.total === null
+          ? show.table
+            ? null
+            : 'table'
+          : !e.back && show.table?.pig !== e.pig
+            ? { spot: e.spot }
+            : null
+    this.hall.update(dt, this.clock, show, here, go)
     const t = here ? show?.table : null
     const key = t ? `${t.pig}|${t.scores ? 'done' : 'looking'}` : ''
     if (key !== this.judging) {

@@ -1700,7 +1700,9 @@ export class Farm {
       return
     }
     const caught = [...this.farmers.values()].find((f) => dist(f, p) < RAID_SPOOK)
-    if (caught || this.evening || this.raining || this.t >= p.until || p.hunger >= FULL || !this.raidable(p.raid)) return this.leaveRaid(p, caught)
+    // Greedy: being full doesn't stop them. Only being caught (a farmer within herding range), running out of time,
+    // dusk, rain, or nothing left worth eating.
+    if (caught || this.evening || this.raining || this.t >= p.until || !this.raidable(p.raid)) return this.leaveRaid(p, caught)
     // Round the barn, trees and all (moveTo finds the way), then in by the gate to the bed.
     if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt, 0.25)) return
     const bed = BEDS[p.raid]
@@ -1900,6 +1902,8 @@ export class Farm {
       if (this.t >= p.lostUntil) this.comeBack(p)
       return
     }
+    // Up on the judging table at the show: sitting nicely till it's picked up again.
+    if (p.state === 'show') return
     if (p.state === 'held') {
       const f = p.heldBy === null ? undefined : this.farmers.get(p.heldBy)
       if (!f) return this.setState(p, 'idle', 500)

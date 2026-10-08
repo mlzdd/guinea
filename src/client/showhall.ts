@@ -85,6 +85,10 @@ export class ShowHall {
   private readonly spotTags: (THREE.Sprite | null)[] = SPOTS.map(() => null)
   private spotKey = ''
   private winsKey = ''
+  /** Where to go next: a glowing ring (and a bobbing sign) on your spot, or by the judging table. */
+  private readonly beacon = new THREE.Group()
+  private readonly beaconSign: THREE.Sprite
+  private readonly tableSign: THREE.Sprite
 
   constructor(scene: THREE.Scene) {
     const g = this.group
@@ -180,6 +184,19 @@ export class ShowHall {
       g.add(mat_, num)
     })
 
+    // The beacon: where you need to go next.
+    const glow = new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.9, depthWrite: false })
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.05, 1.3, 40), glow)
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = 0.05
+    ring.renderOrder = 4
+    this.beacon.add(ring)
+    this.beaconSign = textSprite('⬇ Your spot', '#ffe27a', 0.55)
+    this.tableSign = textSprite('⬇ Judging table', '#ffe27a', 0.55)
+    this.beacon.add(this.beaconSign, this.tableSign)
+    this.beacon.visible = false
+    g.add(this.beacon)
+
     this.hallCar.position.set(CAR_HALL.x, 0, CAR_HALL.z)
     this.farmCar.position.set(CAR_FARM.x, 0, CAR_FARM.z)
     this.farmCar.rotation.y = Math.PI / 2
@@ -196,8 +213,11 @@ export class ShowHall {
     this.people.push({ model, pig, x, z, yaw })
   }
 
-  /** `here`: I'm at the show (otherwise the hall needn't be drawn or animated). */
-  update(dt: number, clock: number, show: ShowSnap | null, here: boolean) {
+  /**
+   * `here`: I'm at the show (otherwise the hall needn't be drawn or animated). `go`: where I should head next (my spot,
+   * or the judging table), to light it up.
+   */
+  update(dt: number, clock: number, show: ShowSnap | null, here: boolean, go: { spot: number } | 'table' | null = null) {
     this.farmCar.visible = show?.phase === 'boarding'
     this.hallCar.visible = !!show && show.phase !== 'boarding'
     this.group.visible = here
@@ -211,6 +231,17 @@ export class ShowHall {
       p.pig.root.rotation.y = p.yaw + Math.PI / 2
       p.pig.pose('held', 0, clock, i * 0.7)
     })
+    this.beacon.visible = !!go
+    if (go) {
+      const at = go === 'table' ? { x: TABLE.x0 + (TABLE.x1 - TABLE.x0) / 2, z: TABLE.z1 + 1.2 } : SPOTS[go.spot]
+      this.beacon.position.set(at.x, 0, at.z)
+      this.beacon.children[0].scale.setScalar(1 + Math.sin(clock * 5) * 0.1)
+      this.beaconSign.visible = go !== 'table'
+      this.tableSign.visible = go === 'table'
+      const bob = 3.2 + Math.abs(Math.sin(clock * 3)) * 0.35
+      this.beaconSign.position.y = bob
+      this.tableSign.position.y = bob
+    }
     if (!show) return
     // Rosettes on the rivals' piggies for every show they've won.
     const wins = show.rivalWins.join()

@@ -108,6 +108,8 @@ export class Hud {
   private callouts: { title: string; sub: string; style: CalloutStyle }[] = []
   private calling = false
   private judgingKey = ''
+  /** Closes the show results on a click anywhere (while they're up). */
+  private resultsClose: ((e: PointerEvent) => void) | null = null
 
   /** A basket slot was clicked (veg index, or VEGGIES.length for the hay). */
   onSlot: (i: number) => void = () => {}
@@ -473,13 +475,25 @@ export class Hud {
             `<tr class="${b.farm ? 'farm' : ''}"><td>${esc(b.who)}</td><td>${b.wins}</td><td>${b.podiums}</td><td>${b.shows}</td><td><small>${esc(b.best.pig)} ${b.best.total}</small></td></tr>`,
         )
         .join('')}</table>
-      <div class="buttons"><button id="rs-ok">Brilliant!</button></div>`
+      <div class="buttons"><button id="rs-ok">Brilliant!</button></div>
+      <p class="hint">Click anywhere to carry on</p>`
+    // A click anywhere closes it (once it's had a moment on screen, so a click already on its way doesn't).
+    this.hideShowResults()
     el.hidden = false
-    el.querySelector('#rs-ok')!.addEventListener('click', () => (el.hidden = true))
+    const armed = performance.now() + 600
+    this.resultsClose = (e: PointerEvent) => {
+      if (performance.now() < armed) return
+      e.preventDefault()
+      e.stopPropagation()
+      this.hideShowResults()
+    }
+    addEventListener('pointerdown', this.resultsClose, true)
   }
 
   hideShowResults() {
     $('results').hidden = true
+    if (this.resultsClose) removeEventListener('pointerdown', this.resultsClose, true)
+    this.resultsClose = null
   }
 
   setPrompt(text: string | null) {

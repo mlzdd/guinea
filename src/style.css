@@ -1229,6 +1229,13 @@ kbd {
   margin-top: 12px;
 }
 
+#results .hint {
+  margin: 6px 0 0;
+  font-size: 14px;
+  text-align: center;
+  opacity: 0.6;
+}
+
 #results button {
   font: inherit;
   font-size: 17px;

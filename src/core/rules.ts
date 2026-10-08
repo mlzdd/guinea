@@ -143,8 +143,8 @@ export const FRIEND_STAY = 0.35
 /**
  * Sneaky piggies (nearly half of them, `isSneaky`) sometimes sneak in through a veg patch's gate when they're peckish
  * (RAID_CHANCE each time they pick what to do by day) and munch away at a growing or ripe bed with no farmer near it. It
- * fills them up, but a growing bed doesn't grow while they're in it, and a ripe one gets eaten (RAID_EAT_MS). They sneak back out by the gate when full, after RAID_MS, at dusk, or
- * when a farmer comes within RAID_SPOOK.
+ * fills them up, but a growing bed doesn't grow while they're in it, and a ripe one gets eaten (RAID_EAT_MS). Greedy:
+ * full or not, they keep at it till RAID_MS is up, dusk or rain, or a farmer comes within RAID_SPOOK (herding range).
  */
 export const SNEAKY = 0.45
 export const isSneaky = (pigId: number) => (pigId * 0.7548) % 1 < SNEAKY

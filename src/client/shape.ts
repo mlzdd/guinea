@@ -28,17 +28,27 @@ export function loaf(d: THREE.Vector3) {
   return v
 }
 
-/** The head: broad at the back, narrowing to a rounded muzzle with a flattish end. */
-export function headShape(d: THREE.Vector3) {
+/**
+ * The head: big and broad, with a long Roman-nosed profile down to the muzzle and the chin tucked in underneath. Each
+ * pig's a little different: how pronounced the ridge of the nose, how far the cheeks pull in.
+ */
+export const headShape = (ridge = 0.6, cheeks = 0.38) => (d: THREE.Vector3) => {
   const v = d.clone()
   if (v.y < 0) v.y *= 0.85 // a flatter chin
   if (v.z < 0) {
     const front = -v.z
-    v.x *= 1 - 0.32 * front * front
-    v.y *= 1 - 0.24 * front * front
-    v.y -= 0.06 * front * front
-    // The end of the face is flattened off a little rather than coming to a sharp point.
-    v.z = -front * (1.12 - 0.1 * front * front)
+    // Narrowing towards the nose (`cheeks`: how much the whole front of the face pulls in), more at the top than the
+    // bottom (`ridge`): the bridge of the nose is a narrow arch down the middle of the face, with the eyes either side.
+    v.x *= 1 - (cheeks + ridge * Math.max(0, v.y)) * front * front
+    // …the brow sloping down in a long gentle curve to the nose (a "Roman nose")…
+    if (v.y > 0) v.y *= 1 - 0.28 * front * front
+    // …and the chin and throat tucked back under the muzzle, so the nose is the front-most point.
+    if (v.y < 0) v.z *= 1 + 0.4 * v.y
+    v.z *= 1.16
+    // The nose is the point: the very front of the muzzle comes forward to a soft tip (the mouth below it then tucks
+    // back with the chin).
+    const tip = Math.max(0, 1 - (d.x * d.x + d.y * d.y) / 0.07)
+    v.z -= 0.08 * tip * tip
   }
   return v
 }

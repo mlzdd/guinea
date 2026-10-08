@@ -861,12 +861,18 @@ describe('the pig show', () => {
     expect(me.z).toBeCloseTo(TABLE_SPOT.z + 1.6, 1)
     farm.handle(id, { t: 'putdown' }) // not just anywhere
     expect(me.holding).toBe(star.id)
+    star.until = 0 // a real piggy's itching to be off and doing something
     farm.handle(id, { t: 'judge' })
     expect(star.state).toBe('show')
     expect(me.holding).toBeNull()
     farm.handle(id, { t: 'fetch' }) // not till the judge is done
     expect(me.holding).toBeNull()
     run(farm, JUDGE_MS + 100)
+    // Still sat on the table, waiting to be picked up.
+    expect(star.state).toBe('show')
+    expect(dist(star, TABLE_SPOT)).toBeLessThan(0.1)
+    run(farm, 5000)
+    expect(star.state).toBe('show')
     const scores = farm.snapshot().show!.table!.scores!
     expect(total(scores)).toBeGreaterThan(85)
     farm.handle(id, { t: 'fetch' })
