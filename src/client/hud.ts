@@ -126,6 +126,18 @@ export class Hud {
     $('topbar').classList.toggle('night', night)
   }
 
+  /** The paused banner: who paused it, or null to hide it. */
+  setPaused(by: string | null) {
+    const el = $('paused')
+    el.hidden = !by
+    if (by && el.dataset.by !== by) {
+      el.dataset.by = by
+      el.innerHTML = `<div class="big">⏸️ Paused</div><div class="sub"></div><div class="hint">Press <kbd>P</kbd> to carry on</div>`
+      el.querySelector('.sub')!.textContent = `by ${by}: the piggies are waiting`
+    }
+    if (!by) delete el.dataset.by
+  }
+
   /** Shades the edges of the screen as it gets dark (0..1). */
   setDarkness(dark: number) {
     $('nightshade').style.opacity = String(Math.round(dark * 100) / 100)

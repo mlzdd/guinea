@@ -138,6 +138,8 @@ export type ClientMsg =
   | { t: 'door' }
   /** Ask for the farm diary. */
   | { t: 'diary' }
+  /** Pause the farm for everyone (or carry on). */
+  | { t: 'pause' }
 
 export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop' | 'fun' | 'job' | 'baby' | 'rain'
 
@@ -179,6 +181,8 @@ export type ServerMsg =
       door: boolean
       /** The zoomometer, 0..1: zoomies when it's full. */
       zoom: number
+      /** Who paused the farm (everything stands still till someone carries on), or null. */
+      paused: string | null
       /** The squares of land the farm owns. */
       land: SquareId[]
       /** The salad platter: veg in it (VEGGIES order), whether tonight's has been served, and bites left on the floor. */
@@ -265,6 +269,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'serve':
     case 'door':
     case 'diary':
+    case 'pause':
     case 'putdown':
     case 'cuddle':
     case 'shoo':

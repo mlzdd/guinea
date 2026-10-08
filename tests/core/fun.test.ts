@@ -876,6 +876,74 @@ describe('guinea pig trains', () => {
   })
 })
 
+describe('pause', () => {
+  it('P stops everything for everyone till someone carries on; nobody left, it carries on by itself', () => {
+    const { farm, id, me } = setup()
+    const bob = farm.join('Bob', 1)!
+    const p = lonePig(farm, 0, 0, 100)
+    farm['walk'](p, { x: 6, z: 6 }, 'wander')
+    farm.handle(id, { t: 'pause' })
+    expect(farm.snapshot().paused).toBe('Ann')
+    expect(alerts(farm, 'farmer').some((a) => a.text.includes('Ann paused the farm'))).toBe(true)
+    const t = farm.t
+    const at = { x: p.x, z: p.z }
+    run(farm, 5000)
+    expect(farm.t).toBe(t)
+    expect({ x: p.x, z: p.z }).toEqual(at)
+    // Nothing gets done meanwhile.
+    me.basket[0] = 3
+    farm.handle(id, { t: 'throw', veg: 'carrot', x: 1, z: 1 })
+    expect(me.basket[0]).toBe(3)
+    expect(parseClientMsg(JSON.stringify({ t: 'pause' }))).toEqual({ t: 'pause' })
+
+    // Anyone can carry on.
+    farm.handle(bob, { t: 'pause' })
+    expect(farm.paused).toBeNull()
+    run(farm, 1000)
+    expect(farm.t).toBeGreaterThan(t)
+    expect(p.x).not.toBe(at.x)
+
+    farm.handle(id, { t: 'pause' })
+    farm.leave(id)
+    expect(farm.paused).toBe('Ann')
+    farm.leave(bob)
+    expect(farm.paused).toBeNull()
+  })
+})
+
+describe('finding the way', () => {
+  it('pigs behind the barn go round to the door, not into the wall', () => {
+    for (const [x, z] of [
+      [13, -20], // between the barn and the far veg patch
+      [20, -12], // in front of the far veg patch
+      [-14, -20], // the hay meadow's stack yard
+    ]) {
+      const { farm } = setup()
+      const p = lonePig(farm, x, z, 100)
+      farm['walk'](p, { x: 0, z: -18 }, 'wander')
+      // Round the corner, along the front and in: about 30 m, a little under 30 s at a walk. Sliding along the
+      // walls takes far longer.
+      expect(run(farm, 35_000, () => isInside(p))).toBe(true)
+    }
+  })
+
+  it('round a veg patch to the far side of it, not into the fence (raiders excepted)', () => {
+    const { farm } = setup()
+    const garden = GARDENS.find((g) => g.square === 'garden')!
+    const p = lonePig(farm, -22, garden.z0 - 1.5, 100)
+    farm['walk'](p, { x: -22, z: garden.z1 + 1.5 }, 'wander')
+    let through = false
+    expect(
+      run(farm, 30_000, () => {
+        through ||= inRect(p, garden)
+        return p.state !== 'wander'
+      }),
+    ).toBe(true)
+    expect(through).toBe(false)
+    expect(Math.hypot(p.x + 22, p.z - garden.z1 - 1.5)).toBeLessThan(0.5)
+  })
+})
+
 describe('hidey huts', () => {
   it('pigs only get in and out by the open front, round the back and sides', () => {
     const { farm } = setup()

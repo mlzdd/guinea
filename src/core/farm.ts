@@ -47,7 +47,8 @@ import {
   trees,
   pushOut,
   hutStep,
-  raidPath,
+  pigLineBlocked,
+  pigPath,
   settleFarmer,
   settlePig,
   settleRaider,
@@ -268,8 +269,11 @@ export interface Pig extends PigLook {
   raid: number | null
   /** When it started munching (0 = still squeezing in). */
   munchFrom: number
-  /** A raider's way to its bed (waypoints still to go), round everything in the way. */
+  /** Its way round walls and fences (waypoints still to go), and where that way leads. */
   path: P[]
+  pathFor: P | null
+  /** When it last looked for a way (so it doesn't keep on looking). */
+  pathAt: number
 }
 
 /** Food on the ground, or a fixed source: bowls are ids 0..3, hoppers 4..5, and they never go away. */
@@ -409,6 +413,8 @@ export const SALAD_ID = HOPPER_ID + HOPPERS.length
 /** Then the hay racks. */
 export const RACK_ID = SALAD_ID + 1
 const PIG_GAP = 0.6
+/** A pig looks for a new way round things at most this often. */
+const PATH_EVERY_MS = 800
 const FOOD_RING = 0.45
 const BOWL_RING = 0.6
 
@@ -457,6 +463,8 @@ export class Farm {
   baskets = new Map<string, { basket: number[]; hay: number }>()
   /** Sacks of pellets left in the feed bin today: one per hopper, restocked at dawn. */
   sacks = 1
+  /** Who paused the farm: nothing happens (no clock, pigs, crops, foxes) till someone carries on. Not saved. */
+  paused: string | null = null
   /** Armfuls left on the hay table's bale today (a new bale every dawn). */
   bale = BALE_ARMFULS
   /** The last day everyone was reminded to serve the salad. */
@@ -552,6 +560,8 @@ export class Farm {
       raid: null,
       munchFrom: 0,
       path: [],
+      pathFor: null,
+      pathAt: 0,
     }
   }
 
@@ -631,12 +641,21 @@ export class Farm {
     this.baskets.set(f.name, { basket: [...f.basket], hay: f.hay })
     this.farmers.delete(id)
     this.alert('farmer', `${f.name} went home`)
+    // Nobody left to carry on: whoever comes next finds it going.
+    if (!this.farmers.size) this.paused = null
   }
 
   handle(id: number, msg: ClientMsg) {
     const f = this.farmers.get(id)
     if (!f) return
     this.syncLand()
+    if (msg.t === 'pause') {
+      this.paused = this.paused ? null : f.name
+      this.alert('farmer', this.paused ? `⏸️ ${f.name} paused the farm` : `▶️ ${f.name} got the farm going again`)
+      return
+    }
+    // Paused: everything stands still, farmers too (the diary can still be read).
+    if (this.paused && msg.t !== 'diary') return
     switch (msg.t) {
       case 'state':
         f.x = msg.x
@@ -1015,7 +1034,7 @@ export class Farm {
   // ---------------------------------------------------------------- the clock
 
   tick(dtMs: number) {
-    if (this.farmers.size === 0) return
+    if (this.farmers.size === 0 || this.paused) return
     this.syncLand()
     const dt = dtMs / 1000
     this.t += dtMs
@@ -1137,6 +1156,8 @@ export class Farm {
     p.tx = to.x
     p.tz = to.z
     p.food = null
+    p.path = []
+    p.pathFor = null
     p.stuckAt = this.t
     p.stuckX = p.x
     p.stuckZ = p.z
@@ -1468,12 +1489,10 @@ export class Farm {
   private startRaid(p: Pig, bed: number): boolean {
     const b = BEDS[bed]
     const spot = { x: b.x + ((p.id % 3) - 1) * 0.6, z: b.z + 0.4 }
-    const path = raidPath(p, spot, PIG_RADIUS, this.doorShut ? [DOOR_GATE] : [])
-    if (!path) return false
+    if (!pigPath(p, spot, PIG_RADIUS, true, this.doorShut ? [DOOR_GATE] : [])) return false
     this.walk(p, spot, 'raid')
     p.raid = bed
     p.munchFrom = 0
-    p.path = path
     p.until = this.t + 60_000 // gives up if it can't get there
     return true
   }
@@ -1490,14 +1509,8 @@ export class Farm {
     }
     const caught = [...this.farmers.values()].find((f) => dist(f, p) < RAID_SPOOK)
     if (caught || this.evening || this.raining || this.t >= p.until || p.hunger >= FULL || this.beds[p.raid].stage !== 'growing') return this.leaveRaid(p, caught)
-    // Along its way (round the barn, trees and all), then in under the fence to the bed.
-    const speed = PIG_WALK * 1.3 * this.pace(p, 'walk')
-    if (p.path.length > 1) {
-      if (this.moveTo(p, p.path[0], speed, dt, 0.35)) p.path.shift()
-      return
-    }
-    if (!this.moveTo(p, { x: p.tx, z: p.tz }, speed, dt, 0.25)) return
-    p.path = []
+    // Round the barn, trees and all (moveTo finds the way), then in under the fence to the bed.
+    if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt, 0.25)) return
     const bed = BEDS[p.raid]
     if (!p.munchFrom) {
       p.munchFrom = this.t
@@ -1535,7 +1548,6 @@ export class Farm {
     }
     this.walk(p, exit, 'raid')
     p.raid = null
-    p.path = []
     if (caught && bed) this.alert('fun', `🥬 Caught! ${caught.name} found ${p.name} munching the ${bed.kind}s. Off you pop!`)
   }
 
@@ -1595,6 +1607,29 @@ export class Farm {
     this.decide(p)
   }
 
+  /**
+   * The next point on a pig's way to `leg`: straight there if nothing's in the way, otherwise along a path round the
+   * barn walls, garden fences and the rest (worked out once, and again if the goal moves or the pig gets pushed off it).
+   */
+  private route(p: Pig, leg: P): P {
+    const raid = p.state === 'raid'
+    const extra = this.doorShut ? [DOOR_GATE] : []
+    if (!pigLineBlocked(p, leg, PIG_RADIUS, raid, extra)) {
+      p.path = []
+      return leg
+    }
+    // (With no way there it walks straight at it, and looks again in a bit.)
+    const stale = !p.pathFor || dist(p.pathFor, leg) > 0.5 || !p.path.length || dist(p, p.path[0]) > 4
+    if (stale && (!p.pathFor || this.t - p.pathAt > PATH_EVERY_MS)) {
+      p.path = pigPath(p, leg, PIG_RADIUS, raid, extra) ?? []
+      p.pathFor = { x: leg.x, z: leg.z }
+      p.pathAt = this.t
+    }
+    // Past a waypoint, or the next one's in plain sight: on to the next.
+    while (p.path.length > 1 && (dist(p, p.path[0]) < 0.35 || !pigLineBlocked(p, p.path[1], PIG_RADIUS, raid, extra))) p.path.shift()
+    return p.path.length > 1 ? p.path[0] : leg
+  }
+
   /** Walks towards a point (through the door if need be). True once there. */
   private moveTo(p: Pig, to: P, speed: number, dt: number, near = 0.15): boolean {
     // In a train: head for the spot just behind the leader instead (it never counts as arriving).
@@ -1603,7 +1638,9 @@ export class Farm {
     const behind = leader && { x: leader.x - facing(leader.yaw).x * TRAIN_GAP, z: leader.z - facing(leader.yaw).z * TRAIN_GAP }
     const goal = behind ?? to
     let step = nextStep(p, goal, (((p.id * 0.618) % 1) - 0.5) * 2)
-    // Round the hidey huts, and into them only by the front.
+    // Round walls and fences rather than into them (in a train, the leader's doing that)…
+    if (!behind) step = this.route(p, step)
+    // …and round the hidey huts, into them only by the front.
     step = hutStep(p, step, PIG_RADIUS)
     const final = !behind && step === to
     const dx = step.x - p.x
@@ -2299,6 +2336,7 @@ export class Farm {
       rain: this.raining,
       door: this.doorShut,
       zoom: r2(this.zoomMeter),
+      paused: this.paused,
       land: [...this.land],
       salad: { veg: [...this.salad], served: this.saladServed, bites: this.foods.get(SALAD_ID)!.bites },
     }

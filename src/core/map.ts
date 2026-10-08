@@ -300,6 +300,10 @@ export const FARMER_BOUNDS = r(BOUNDS.x0 - FARMER_ROAM, BOUNDS.x1 + FARMER_ROAM,
 /** Too tall to jump: barn walls, trees, the pond. */
 const TALL = 99
 
+/** The hut walls among PIG_SOLIDS (route-finding leaves them to `hutStep`). */
+const HUT_SOLIDS = new Set<Rect>()
+const hutSolids = () => HUT_SOLIDS
+
 export function setLand(ids: readonly SquareId[]) {
   const next = SQUARES.map((s) => s.id).filter((id) => ids.includes(id))
   if (next.length === owned.length && next.every((id, i) => owned[i] === id)) return
@@ -330,7 +334,10 @@ export function setLand(ids: readonly SquareId[]) {
     arr.length = 0
     arr.push(...items)
   }
-  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...hideys().flatMap(hutWalls)])
+  const huts = hideys().flatMap(hutWalls)
+  HUT_SOLIDS.clear()
+  for (const w of huts) HUT_SOLIDS.add(w)
+  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...huts])
   fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...pond, DOOR_GATE])
   const tall = (h: number) => (b: Rect): Block => ({ ...b, h })
   fill(FARMER_BLOCKS, [
@@ -534,35 +541,86 @@ export function settleRaider(p: P, radius: number): void {
   clampTo(p, BOUNDS, radius)
 }
 
-/**
- * A sneaky pig's way to a veg bed: round the barn walls (out through the door), trees, the pond and the hay field, then
- * under the garden fence. A grid search on the owned land, straightened out wherever there's a clear line. Waypoints
- * after `from`, ending at `to`; null if there's no way (`extra`: more in the way, like the shut barn door).
- */
-export function raidPath(from: P, to: P, radius: number, extra: Rect[] = []): P[] | null {
+/** Pig solids, for a raider (who squeezes under the garden fences) or not, plus anything `extra` (the shut barn door). */
+const pigSolids = (raid: boolean, extra: Rect[]) => {
   const gs = gardens()
-  const solids = [...PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)), ...extra]
-  const CELL = 0.5
-  const cols = Math.ceil((BOUNDS.x1 - BOUNDS.x0) / CELL)
-  const rows = Math.ceil((BOUNDS.z1 - BOUNDS.z0) / CELL)
-  const at = (i: number): P => ({ x: BOUNDS.x0 + ((i % cols) + 0.5) * CELL, z: BOUNDS.z0 + (Math.floor(i / cols) + 0.5) * CELL })
-  const cell = (p: P) =>
-    Math.max(0, Math.min(rows - 1, Math.floor((p.z - BOUNDS.z0) / CELL))) * cols + Math.max(0, Math.min(cols - 1, Math.floor((p.x - BOUNDS.x0) / CELL)))
-  const open = (p: P) => onFarm(p) && inRect(p, BOUNDS, -radius) && !solids.some((b) => inRect(p, b, radius + 0.05))
-  const clear = (a: P, b: P) => !solids.some((s) => crosses(a, b, { x0: s.x0 - radius, x1: s.x1 + radius, z0: s.z0 - radius, z1: s.z1 + radius }))
-  const start = cell(from)
-  const goal = cell(to)
-  // A* over the cells (8 ways), never cutting a blocked corner.
-  const cost = new Float64Array(cols * rows).fill(Infinity)
-  const prev = new Int32Array(cols * rows).fill(-1)
-  const free = new Int8Array(cols * rows) // 0 unknown, 1 free, 2 blocked
-  const isFree = (i: number) => {
-    if (!free[i]) free[i] = i === start || i === goal || open(at(i)) ? 1 : 2
-    return free[i] === 1
+  return [...(raid ? PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)) : PIG_SOLIDS), ...extra]
+}
+
+/** Is the straight line from a to b blocked for a pig (by anything bar the hidey huts, which `hutStep` sees to)? */
+export function pigLineBlocked(a: P, b: P, radius: number, raid = false, extra: Rect[] = []): boolean {
+  const slack = radius - 0.05 // pigs pushed against a wall can still slide off along it
+  const huts = hutSolids()
+  return pigSolids(raid, extra).some((s) => !huts.has(s) && crosses(a, b, { x0: s.x0 - slack, x1: s.x1 + slack, z0: s.z0 - slack, z1: s.z1 + slack }))
+}
+
+const CELL = 0.5
+const COLS_N = Math.ceil((BOUNDS.x1 - BOUNDS.x0) / CELL)
+const ROWS_N = Math.ceil((BOUNDS.z1 - BOUNDS.z0) / CELL)
+const cellAt = (i: number): P => ({ x: BOUNDS.x0 + ((i % COLS_N) + 0.5) * CELL, z: BOUNDS.z0 + (Math.floor(i / COLS_N) + 0.5) * CELL })
+const cellOf = (p: P) =>
+  Math.max(0, Math.min(ROWS_N - 1, Math.floor((p.z - BOUNDS.z0) / CELL))) * COLS_N + Math.max(0, Math.min(COLS_N - 1, Math.floor((p.x - BOUNDS.x0) / CELL)))
+/** The search's working arrays, shared by every search (see pigPath). */
+const costs = new Float64Array(COLS_N * ROWS_N)
+const prevs = new Int32Array(COLS_N * ROWS_N)
+const seen = new Uint32Array(COLS_N * ROWS_N)
+let search = 0
+/** A search gives up after looking at this many cells (no way there, or a very long way round). */
+const MAX_EXPAND = 6000
+/** Which cells a pig can stand in, worked out once per layout (land, raider or not, door). */
+const grids = new Map<string, Uint8Array>()
+function freeGrid(radius: number, raid: boolean, extra: Rect[]): Uint8Array {
+  const key = `${owned.join()}|${radius}|${raid}|${extra.map((b) => `${b.x0},${b.z0}`).join()}`
+  let g = grids.get(key)
+  if (g) return g
+  if (grids.size > 16) grids.clear()
+  const solids = pigSolids(raid, extra)
+  g = new Uint8Array(COLS_N * ROWS_N)
+  for (let i = 0; i < g.length; i++) {
+    const c = cellAt(i)
+    g[i] = onFarm(c) && inRect(c, BOUNDS, -radius) && !solids.some((b) => inRect(c, b, radius + 0.05)) ? 1 : 0
   }
-  const h = (i: number) => dist(at(i), at(goal))
-  const queue: [number, number][] = [[h(start), start]]
-  cost[start] = 0
+  grids.set(key, g)
+  return g
+}
+
+/**
+ * A pig's way from a to b round everything in the way (barn walls, out through the door, garden fences, trees, the
+ * pond, the hay field; a raider squeezes under the garden fences instead). A grid search on the owned land,
+ * straightened out wherever there's a clear line. Waypoints after `from`, ending with `to` itself; null if there's no
+ * way (`extra`: more in the way, like the shut barn door).
+ */
+export function pigPath(from: P, to: P, radius: number, raid = false, extra: Rect[] = []): P[] | null {
+  const grid = freeGrid(radius, raid, extra)
+  const start = cellOf(from)
+  let goal = cellOf(to)
+  // Aiming at somewhere it can't quite stand (up against a wall, in a hut): the nearest cell it can, then on in.
+  if (!grid[goal]) {
+    let best = -1
+    const gx = goal % COLS_N
+    const gz = Math.floor(goal / COLS_N)
+    for (let dz = -3; dz <= 3; dz++)
+      for (let dx = -3; dx <= 3; dx++) {
+        const x = gx + dx
+        const z = gz + dz
+        if (x < 0 || z < 0 || x >= COLS_N || z >= ROWS_N || !grid[z * COLS_N + x]) continue
+        const j = z * COLS_N + x
+        if (best < 0 || dist(cellAt(j), to) < dist(cellAt(best), to)) best = j
+      }
+    if (best < 0) return null
+    goal = best
+  }
+  const free = (i: number) => i === start || grid[i] === 1
+  // A* over the cells (8 ways), never cutting a blocked corner. The arrays are kept between searches: a cell's cost
+  // only counts if it was set in this search (`seen`).
+  search++
+  const cost = (i: number) => (seen[i] === search ? costs[i] : Infinity)
+  const gx = cellAt(goal)
+  const h = (i: number) => {
+    const c = cellAt(i)
+    return Math.hypot(c.x - gx.x, c.z - gx.z) / CELL
+  }
+  const queue: [number, number][] = []
   const push = (f: number, i: number) => {
     // A little binary heap on f.
     queue.push([f, i])
@@ -591,30 +649,40 @@ export function raidPath(from: P, to: P, radius: number, extra: Rect[] = []): P[
     }
     return top
   }
-  while (queue.length) {
+  seen[start] = search
+  costs[start] = 0
+  prevs[start] = -1
+  push(h(start), start)
+  let found = false
+  for (let n = 0; queue.length && n < MAX_EXPAND; n++) {
     const [, i] = pop()
-    if (i === goal) break
-    const cx = i % cols
-    const cz = Math.floor(i / cols)
+    if (i === goal) {
+      found = true
+      break
+    }
+    const cx = i % COLS_N
+    const cz = Math.floor(i / COLS_N)
     for (let dz = -1; dz <= 1; dz++)
       for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dz) continue
         const nx = cx + dx
         const nz = cz + dz
-        if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue
-        const j = nz * cols + nx
-        if (!isFree(j) || (dx && dz && (!isFree(cz * cols + nx) || !isFree(nz * cols + cx)))) continue
-        const c = cost[i] + (dx && dz ? Math.SQRT2 : 1)
-        if (c >= cost[j]) continue
-        cost[j] = c
-        prev[j] = i
+        if (nx < 0 || nz < 0 || nx >= COLS_N || nz >= ROWS_N) continue
+        const j = nz * COLS_N + nx
+        if (!free(j) || (dx && dz && (!free(cz * COLS_N + nx) || !free(nz * COLS_N + cx)))) continue
+        const c = costs[i] + (dx && dz ? Math.SQRT2 : 1)
+        if (c >= cost(j)) continue
+        seen[j] = search
+        costs[j] = c
+        prevs[j] = i
         push(c + h(j), j)
       }
   }
-  if (cost[goal] === Infinity) return null
+  if (!found) return null
   const cells: P[] = []
-  for (let i = prev[goal]; i !== -1 && i !== start; i = prev[i]) cells.unshift(at(i))
+  for (let i = goal; i !== -1 && i !== start; i = prevs[i]) cells.unshift(cellAt(i))
   // Straighten: from each point, jump to the furthest one in plain sight.
+  const clear = (a: P, b: P) => !pigLineBlocked(a, b, radius, raid, extra)
   const path: P[] = []
   const points = [...cells, to]
   let here = from

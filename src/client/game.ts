@@ -182,7 +182,11 @@ export class Game {
     this.bubbles = new Bubbles(this.world.scene)
     this.input = new Input(canvas)
     // A click does what E would; with nothing to do, it throws.
-    this.input.onClick = () => (this.action?.msg ? this.act() : this.throwVeg())
+    this.input.onClick = () => {
+      if (this.snap?.paused) return
+      if (this.action?.msg) this.act()
+      else this.throwVeg()
+    }
     this.hud.onSlot = (i) => this.slot(i)
     this.input.onKey = (code) => this.key(code)
 
@@ -487,6 +491,9 @@ export class Game {
   // ---------------------------------------------------------------- input
 
   private key(code: string) {
+    if (code === 'KeyP') return this.send({ t: 'pause' })
+    // Paused: nothing to do but look at the help or the diary, or carry on.
+    if (this.snap?.paused && !['KeyH', 'KeyL', 'Escape'].includes(code)) return
     if (code.startsWith('Digit')) {
       const i = Number(code.slice(5)) - 1
       if (i >= 0 && i < VEGGIES.length) this.select(i)
@@ -535,6 +542,7 @@ export class Game {
 
   /** A basket slot was clicked: take that in hand, or if it already is, drop one at your feet. */
   private slot(i: number) {
+    if (this.snap?.paused) return
     if (i !== this.selected) return this.select(i)
     const ahead = facing(this.me.yaw)
     this.throwVeg({ x: this.me.x + ahead.x * 0.7, z: this.me.z + ahead.z * 0.7 })
@@ -587,6 +595,23 @@ export class Game {
 
     // Camera zoom (it never turns)
     this.camDist = Math.max(10, Math.min(38, this.camDist + this.input.takeZoom() * 2))
+
+    // Paused: everything stands still (no walking, no animation), just the picture and a banner.
+    this.hud.setPaused(this.snap.paused)
+    if (this.snap.paused) {
+      this.jumpQueued = false
+      this.me.vx = this.me.vz = 0
+      this.input.takeZoom()
+      const flat = this.camDist * Math.cos(CAM_PITCH)
+      this.camera.position.set(
+        this.camTarget.x + Math.sin(this.camYaw) * flat,
+        this.camTarget.y + this.camDist * Math.sin(CAM_PITCH),
+        this.camTarget.z + Math.cos(this.camYaw) * flat,
+      )
+      this.camera.lookAt(this.camTarget)
+      this.renderer.render(this.world.scene, this.camera)
+      return
+    }
 
     // Walk relative to the camera.
     const mv = this.input.move()

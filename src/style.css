@@ -201,6 +201,42 @@ kbd {
   box-shadow: 0 0 18px rgb(140 160 255 / 35%);
 }
 
+/* Paused: the whole screen dims, with a banner in the middle. */
+#paused {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #fff;
+  text-align: center;
+  text-shadow: 0 2px 6px rgb(0 0 0 / 50%);
+  background: rgb(20 22 40 / 45%);
+  pointer-events: none;
+}
+
+#paused[hidden] {
+  display: none;
+}
+
+#paused .big {
+  font-size: 64px;
+  font-weight: 800;
+}
+
+#paused .sub {
+  font-size: 24px;
+}
+
+#paused .hint {
+  margin-top: 8px;
+  font-size: 18px;
+  opacity: 0.85;
+}
+
 /* Darkens the screen edges at night. */
 #nightshade {
   position: absolute;
