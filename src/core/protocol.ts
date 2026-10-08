@@ -115,6 +115,8 @@ export type ClientMsg =
   | { t: 'shoo' }
   /** At the feed bin: pick up a sack of pellets (or put it back). */
   | { t: 'sack' }
+  /** At the hay table: take as many armfuls off today's bale as fit in your basket. */
+  | { t: 'bale' }
   | { t: 'pour'; hopper: number }
   /** On a patch of the hay meadow: cut an armful (or put it back). */
   | { t: 'hay'; patch: number }
@@ -158,6 +160,8 @@ export type ServerMsg =
       /** Pellets left in each hopper (bites), and sacks left in the feed bin today. */
       hoppers: number[]
       sacks: number
+      /** Armfuls left on the hay table's bale today. */
+      bale: number
       /** Hay in each rack (bites), and how grown each patch of the hay meadow is (0..1, 1 = ready to cut). */
       racks: number[]
       hayField: number[]
@@ -186,7 +190,8 @@ export type ServerMsg =
   | { t: 'thrown'; by: number; kind: Veg | 'hay'; from: { x: number; z: number }; to: { x: number; z: number }; ms: number }
   | { t: 'shoo'; by: number; x: number; z: number }
   | { t: 'purr'; pig: number }
-  | { t: 'alert'; kind: AlertKind; text: string }
+  /** `cheer`: a celebration, called out big in the middle of everyone's screen. */
+  | { t: 'alert'; kind: AlertKind; text: string; cheer?: boolean }
   /** A pig was born, renamed, adopted, grew up or won a rosette. */
   | { t: 'pig'; look: PigLook }
   | { t: 'emote'; by: number; e: number }
@@ -264,6 +269,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'cuddle':
     case 'shoo':
     case 'sack':
+    case 'bale':
       return { t: o.t }
     default:
       return null

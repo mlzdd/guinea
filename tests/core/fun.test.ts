@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { pigCanStand, BEDS, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { pigCanStand, BEDS, GARDENS, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
 import {
@@ -114,6 +114,9 @@ describe('daily jobs', () => {
     }
     expect(farm.coins).toBe(coins + JOB_PAY)
     expect(alerts(farm, 'job')).toHaveLength(1)
+    // A celebration: called out big on everyone's screen (an everyday line like planting isn't).
+    expect(alerts(farm, 'job')[0].cheer).toBe(true)
+    expect(sent(farm).some((m) => m.t === 'alert' && m.kind !== 'job' && m.cheer)).toBe(false)
     expect(farm.snapshot().jobs[0]).toMatchObject({ kind: 'plant', n: 2, goal: 2, text: 'Plant 2 beds' })
     // Done is done: no paying twice.
     farm.beds[2].stage = 'empty'
@@ -873,6 +876,38 @@ describe('guinea pig trains', () => {
   })
 })
 
+describe('hidey huts', () => {
+  it('pigs only get in and out by the open front, round the back and sides', () => {
+    const { farm } = setup()
+    const hut = HIDEYS.find((h) => h.square === 'yard' && h.x > 0)!
+    const inHut = (p: { x: number; z: number }) => Math.abs(p.x - hut.x) < HIDEY_W / 2 && Math.abs(p.z - hut.z) < HIDEY_D / 2
+    const front = hut.z + HIDEY_D / 2
+    // Every way into (or out of) the hut is across its front edge.
+    const watch = (p: { x: number; z: number }, until: () => boolean) => {
+      let was = { x: p.x, z: p.z }
+      return run(farm, 20_000, () => {
+        if (inHut(p) !== inHut(was)) expect(Math.max(p.z, was.z)).toBeGreaterThan(front - 0.35)
+        was = { x: p.x, z: p.z }
+        return until()
+      })
+    }
+    for (const [x, z] of [
+      [hut.x, hut.z - 2.5], // behind
+      [hut.x - 2.5, hut.z], // beside
+      [hut.x + 2, hut.z - 2], // behind a corner
+    ]) {
+      const p = lonePig(farm, x, z, 100)
+      farm['flee'](p)
+      expect(watch(p, () => p.state === 'hide')).toBe(true)
+      expect(inHut(p)).toBe(true)
+      // And out again, to a spot behind it.
+      farm['walk'](p, { x: hut.x, z: hut.z - 3 }, 'wander')
+      expect(watch(p, () => p.state !== 'wander')).toBe(true)
+      expect(Math.hypot(p.x - hut.x, p.z - (hut.z - 3))).toBeLessThan(0.5)
+    }
+  })
+})
+
 describe('sneaky piggies', () => {
   it('squeeze into the veg patch and munch a bed, which stops growing, until a farmer catches them', () => {
     const { farm, me } = setup()
@@ -881,8 +916,10 @@ describe('sneaky piggies', () => {
     const bed = farm.beds[0]
     Object.assign(bed, { stage: 'growing', plantedAt: farm.t, readyAt: farm.t + 50_000 })
     farm['startRaid'](p, 0)
-    expect(alerts(farm, 'fun').some((a) => a.text.includes('sneaked into the veg patch'))).toBe(true)
+    // Only once it's actually in there.
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('sneaked into the veg patch'))).toBe(false)
     expect(run(farm, 15_000, () => p.munchFrom > 0)).toBe(true)
+    expect(alerts(farm, 'fun').some((a) => a.text.includes('sneaked into the veg patch'))).toBe(true)
     expect(Math.hypot(p.x - BEDS[0].x, p.z - BEDS[0].z)).toBeLessThan(1.5)
 
     // Munching away: tummy fills, the bed stands still.
@@ -907,9 +944,28 @@ describe('sneaky piggies', () => {
     expect(grow()).toBeGreaterThan(after)
   })
 
+  it('find their way into any patch: round apple trees, along the barn, under the fence into the bed', () => {
+    // From the orchard (trees in the way) to the far veg patch, and from the yard to the one behind the barn.
+    for (const [bed, x, z] of [
+      [4, 20, 0],
+      [2, 22, -8],
+      [6, -20, 10],
+      [8, 0, 20],
+    ]) {
+      const { farm, me } = setup()
+      Object.assign(me, { x: -30, z: 24 })
+      const p = lonePig(farm, x, z, 40)
+      Object.assign(farm.beds[bed], { stage: 'growing', plantedAt: farm.t, readyAt: farm.t + 500_000 })
+      expect(farm['startRaid'](p, bed)).toBe(true)
+      expect(run(farm, 60_000, () => p.munchFrom > 0)).toBe(true)
+      expect(Math.hypot(p.x - BEDS[bed].x, p.z - BEDS[bed].z)).toBeLessThan(1.5)
+      expect(GARDENS.some((g) => inRect(p, g))).toBe(true)
+    }
+  })
+
   it('only some piggies are sneaky', () => {
     const sneaky = Array.from({ length: 30 }, (_, i) => isSneaky(i)).filter(Boolean).length
-    expect(sneaky).toBeGreaterThan(5)
-    expect(sneaky).toBeLessThan(15)
+    expect(sneaky).toBeGreaterThan(10)
+    expect(sneaky).toBeLessThan(20)
   })
 })

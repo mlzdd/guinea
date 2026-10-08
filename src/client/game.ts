@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_RACKS, HOPPERS, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_BALE, HAY_RACKS, HOPPERS, rackBuilt, rackFront, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
@@ -13,6 +13,7 @@ import {
   hayStackMax,
   LAND,
   NIGHT_START,
+  HEAD_HOME,
   PUP_DAYS,
   REACH,
   SALAD_FROM,
@@ -156,6 +157,8 @@ export class Game {
   private flying: Flying[] = []
   private snap: Snap | null = null
   private selected = 0
+  /** Day, dusk or night, last we looked (null until the first snapshot, so joining doesn't announce anything). */
+  private phase: 'day' | 'dusk' | 'night' | null = null
   private lastSend = 0
   private lastThrow = 0
   private clock = 0
@@ -273,6 +276,17 @@ export class Game {
     return this.mySnap()?.sack ?? false
   }
 
+  /** Dawn, dusk and nightfall get a big callout in the middle of the screen. */
+  private announcePhase(day: number, time: number) {
+    const phase = time < HEAD_HOME ? 'day' : time < NIGHT_START ? 'dusk' : 'night'
+    const was = this.phase
+    this.phase = phase
+    if (was === null || was === phase) return
+    if (phase === 'day') this.hud.callout('☀️ Good morning!', `Day ${day}: time to feed the piggies`, 'dawn')
+    else if (phase === 'dusk') this.hud.callout('🌇 Dusk', 'Bring the piggies in and serve the salad', 'dusk')
+    else this.hud.callout('🌙 Night', 'Shut the barn door: the foxes are about!', 'night')
+  }
+
   /** Armfuls of hay in my basket. */
   private hayArmfuls(): number {
     return this.mySnap()?.hay ?? 0
@@ -318,7 +332,7 @@ export class Game {
         this.hud.alert('day', `🪙 Day ${msg.day} earned the farm ${msg.total} coins`)
         return
       case 'alert':
-        this.hud.alert(msg.kind, msg.text)
+        this.hud.alert(msg.kind, msg.text, msg.cheer)
         return
       case 'pig': {
         const born = !this.pigs[msg.look.id]
@@ -443,6 +457,7 @@ export class Game {
     this.world.setHayField(snap.hayField)
     this.world.setStacks(snap.stacks)
     this.world.setSacks(snap.sacks)
+    this.world.setBale(snap.bale)
     // The map's fences and solids follow the farm's land, for walking about here too.
     setLand(snap.land)
     this.world.setLand(snap.land)
@@ -454,6 +469,7 @@ export class Game {
     this.hud.setJobs(snap.jobs)
     this.hud.setClock(snap.day, snap.time)
     setNight(snap.time >= NIGHT_START)
+    this.announcePhase(snap.day, snap.time)
     this.hud.setStats(snap.pigs, snap.pigs.filter((p) => p.s !== 'lost' && isInside(p)).length, snap.pigs.length)
     if (this.selected === HAY_SLOT && this.hayArmfuls() <= 0) this.selected = 0
     this.hud.setBasket(this.basket(), this.selected, this.basketMax(), this.hayArmfuls())
@@ -537,7 +553,7 @@ export class Game {
     if (this.selected === HAY_SLOT) {
       if (this.hayArmfuls() <= 0) {
         this.selected = 0
-        this.hud.toast('No hay on you! Cut some in the hay meadow 🌾 or take some off a haystack')
+        this.hud.toast('No hay on you! Take some off the bale on the hay table by the door 🌾')
         return
       }
       this.lastThrow = this.clock
@@ -945,10 +961,21 @@ export class Game {
         else if (snap.sacks > 0) offer({ label: `Pick up a sack of pellets (${snap.sacks} left today)`, msg: { t: 'sack' }, d: bin - 1 })
         else
           offer({
-            label: 'Feed bin’s empty: pellets are rationed, <b>one sack per hopper a day</b> (more at dawn). Hay’s the main food: fetch it from the 🌾 hay meadow',
+            label: 'Feed bin’s empty: pellets are rationed, <b>one sack per hopper a day</b> (more at dawn). Hay’s the main food: take some off the 🌾 hay table next door',
             msg: null,
             d: bin - 1,
           })
+      }
+      // The hay table: today's bale, for the racks.
+      const bale = dist(me, HAY_BALE)
+      if (bale < reach) {
+        const d = bale - 1
+        if (sack) offer({ label: 'Hands full (pellet sack)', msg: null, d })
+        else if (snap.bale <= 0)
+          offer({ label: `Today’s bale is all used up: a new one comes at dawn${snap.land.includes('meadow') ? '. Cut more in the 🌾 hay meadow' : ''}`, msg: null, d })
+        else if (!hayRoom) offer({ label: 'Basket full: no room for hay', msg: null, d })
+        else
+          offer({ label: `Take hay for the racks 🌾 (${Math.min(snap.bale, Math.floor((max - used) / HAY_SLOTS))} of ${snap.bale} armfuls left today)`, msg: { t: 'bale' }, d })
       }
       // The stack yard: build up haystacks from the field, take armfuls off them for the racks.
       const stack = snap.land.includes('meadow') ? hayStackAt(me) : -1
@@ -976,12 +1003,12 @@ export class Game {
         else offer({ label: `This hay’s still growing (${Math.round(grown * 100)}%): try another patch`, msg: null, d: 0.5 })
       }
       HAY_RACKS.forEach((r, i) => {
+        // Not one that isn't up yet, or on the other side of the barn wall.
         const d = dist(me, r)
-        if (d > reach) return
+        if (d > reach || !rackBuilt(i, snap.upgrades) || isInside(me) !== isInside(rackFront(r))) return
         const level = `${Math.round((snap.racks[i] / hayRackMax(snap.upgrades)) * 100)}% full`
         if (hay) offer(snap.racks[i] >= hayRackMax(snap.upgrades) ? { label: 'This hay rack is full', msg: null, d: d - 1 } : { label: `Put your hay in the rack (${level})`, msg: { t: 'rack', rack: i }, d: d - 1.5 })
-        else if (!snap.land.includes('meadow')) offer({ label: `Hay rack ${level}: hay comes from the 🌾 hay meadow (buy it in the shop, B)`, msg: null, d: d - 1 })
-        else offer({ label: `Hay rack ${level}: grab an armful from the 🌾 hay meadow`, msg: null, d: d - 1 })
+        else offer({ label: `Hay rack ${level}: grab hay from the 🌾 hay table by the door${snap.land.includes('meadow') ? ' or the hay meadow' : ''}`, msg: null, d: d - 1 })
       })
       HOPPERS.forEach((h, i) => {
         const d = dist(me, h)
@@ -1055,7 +1082,7 @@ export class Game {
       const cx = w / 2
       const cy = h / 2
       const angle = Math.atan2(sy - cy, sx - cx)
-      const m = 48
+      const m = 84 // room for the pointer and the pulse
       const k = Math.min((w / 2 - m) / Math.abs(Math.cos(angle) || 1e-6), (h / 2 - m) / Math.abs(Math.sin(angle) || 1e-6))
       arrows.push({ x: cx + Math.cos(angle) * k, y: cy + Math.sin(angle) * k, angle, icon: p.snap.kind === 'fox' ? '🦊' : '🦅' })
     }

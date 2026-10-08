@@ -1,4 +1,4 @@
-import { FARMER_RADIUS, FARMER_ROAM, START_LAND, type SquareId, type Veg } from './rules.ts'
+import { FARMER_RADIUS, FARMER_ROAM, START_LAND, landLevel, type SquareId, type UpgradeId, type Veg } from './rules.ts'
 
 /** An axis-aligned rectangle on the ground. Every solid thing is one of these. */
 export interface Rect {
@@ -76,14 +76,43 @@ export const HOPPERS: P[] = [
   { x: -10, z: -18.6 },
   { x: 10, z: -18.6 },
 ]
-/** Hay racks along the back wall: farmers fill them with hay from the hay meadow; pigs eat from the floor in front. */
-export const HAY_RACKS: P[] = [
-  { x: -8, z: -24.4 },
-  { x: 0, z: -24.4 },
-  { x: 8, z: -24.4 },
+/**
+ * Hay racks against the barn walls (inside, and a couple outside the front): farmers fill them with hay; pigs eat from
+ * the floor in front (`face`: the way the front looks). Some only go up with the barn improvements (`barn`: the tier).
+ * New ones go on the end, as saves keep the racks by index.
+ */
+export interface HayRack extends P {
+  face: 'n' | 's' | 'e' | 'w'
+  /** Along the wall. */
+  len: number
+  barn: number
+}
+const FACE: Record<HayRack['face'], P> = { n: { x: 0, z: -1 }, s: { x: 0, z: 1 }, e: { x: 1, z: 0 }, w: { x: -1, z: 0 } }
+export const HAY_RACKS: HayRack[] = [
+  // Along the back wall.
+  { x: -8, z: -24.4, face: 's', len: 3, barn: 0 },
+  { x: 0, z: -24.4, face: 's', len: 3, barn: 0 },
+  { x: 8, z: -24.4, face: 's', len: 3, barn: 0 },
+  // On the side walls, between the hoppers and the back houses.
+  { x: -10.95, z: -21, face: 'e', len: 2.4, barn: 0 },
+  { x: 10.95, z: -21, face: 'w', len: 2.4, barn: 0 },
+  // Outside, against the front wall left of the door.
+  { x: -7, z: -9.45, face: 's', len: 3, barn: 0 },
+  // Barn improvements: one inside by the door and one outside on the right…
+  { x: -8.8, z: -10.95, face: 'n', len: 3, barn: 1 },
+  { x: 7, z: -9.45, face: 's', len: 3, barn: 1 },
+  // …and two more on the side walls, between the hoppers and the front houses.
+  { x: -10.95, z: -16.4, face: 'e', len: 2.4, barn: 2 },
+  { x: 10.95, z: -16.4, face: 'w', len: 2.4, barn: 2 },
 ]
+/** Where pigs eat a rack's hay: the floor in front of it. */
+export const rackFront = (r: HayRack, d = 0.5): P => ({ x: r.x + FACE[r.face].x * d, z: r.z + FACE[r.face].z * d })
+/** Is this rack up yet? */
+export const rackBuilt = (i: number, u: readonly UpgradeId[]) => landLevel(u, 'barn') >= HAY_RACKS[i].barn
 /** Where the sacks of pellets are kept, just inside the door. */
 export const FEED_BIN: P = { x: 5, z: -11.4 }
+/** The hay table next to it: today's bale of hay, for the racks. */
+export const HAY_BALE: P = { x: 7.3, z: -11.4 }
 /** The salad station, the other side of the door: farmers build the evening salad platter here… */
 export const SALAD_TABLE: P = { x: -5, z: -11.4 }
 /** …and serve it here, in the middle of the barn floor. */
@@ -109,8 +138,8 @@ export const BED_SPOTS: P[] = [
   ...[-1, 1].flatMap((side) => [
     { x: side * 10.7, z: -24.3 },
     { x: side * 10.7, z: -11.3 },
-    { x: side * 10.9, z: -16.4 },
-    { x: side * 10.9, z: -21 },
+    { x: side * 10.4, z: -16.4 },
+    { x: side * 10.4, z: -21 },
   ]),
   ...[-8, 0, 8].flatMap((x) => [
     { x: x - 1, z: -23.4 },
@@ -182,7 +211,7 @@ const trunks = TREES.map((t) => r(t.x - TRUNK, t.x + TRUNK, t.z - TRUNK, t.z + T
 export const HIDEYS: (P & { square: SquareId })[] = [
   { x: -8, z: 1, square: 'yard' },
   { x: 6, z: -3, square: 'yard' },
-  { x: -29, z: -10, square: 'meadow' },
+  { x: -14.5, z: -12.6, square: 'meadow' },
   { x: -1, z: 12, square: 'huts' },
   { x: -8, z: 19, square: 'huts' },
   { x: 7, z: 19, square: 'huts' },
@@ -193,18 +222,24 @@ export const HIDEY_D = 1.4
 /** Up to the ridge of the roof. */
 export const HIDEY_H = 1.1
 const hutRect = (h: P) => r(h.x - HIDEY_W / 2, h.x + HIDEY_W / 2, h.z - HIDEY_D / 2, h.z + HIDEY_D / 2)
+/** To a pig a hut is its roof down both sides and the back wall: the only way in is the open front (south). */
+const hutWalls = (h: P): Rect[] => {
+  const b = hutRect(h)
+  const T = 0.1
+  return [r(b.x0, b.x1, b.z0, b.z0 + T), r(b.x0, b.x0 + T, b.z0, b.z1), r(b.x1 - T, b.x1, b.z0, b.z1)]
+}
 
-/** The stack yard down the left of the hay meadow: drop armfuls of cut hay here to build up haystacks, take them to the racks later. */
+/** The stack yard down the right of the hay meadow (nearest the barn): drop armfuls of cut hay here to build up haystacks, take them to the racks later. */
 export const HAY_STACKS: P[] = [
-  { x: -29, z: -22.5 },
-  { x: -29, z: -18 },
-  { x: -29, z: -13.5 },
+  { x: -14.5, z: -23.5 },
+  { x: -14.5, z: -20 },
+  { x: -14.5, z: -16.5 },
 ]
 /** The haystack you're next to, if any. */
 export const hayStackAt = (p: P) => HAY_STACKS.findIndex((s) => dist(p, s) < 1.8)
 /** The hay meadow's field: a 4×4 grid of touching patches of tall hay. Cut an armful from one and it grows back. */
 export const HAY_PATCH = 3.5
-const FIELD = { x0: -26.5, z0: -24.5 }
+const FIELD = { x0: -30.5, z0: -24.5 }
 export const HAY_PATCHES: Rect[] = [0, 1, 2, 3].flatMap((row) =>
   [0, 1, 2, 3].map((col) => {
     const x0 = FIELD.x0 + col * HAY_PATCH
@@ -295,7 +330,7 @@ export function setLand(ids: readonly SquareId[]) {
     arr.length = 0
     arr.push(...items)
   }
-  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE])
+  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...hideys().flatMap(hutWalls)])
   fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...pond, DOOR_GATE])
   const tall = (h: number) => (b: Rect): Block => ({ ...b, h })
   fill(FARMER_BLOCKS, [
@@ -377,6 +412,62 @@ export function nextStep(from: P, to: P, lane = 0): P {
   return lined && from.z < DOOR_OUT.z + 1.5 ? { x: from.x, z: DOOR_IN.z } : { x, z: DOOR_OUT.z }
 }
 
+/**
+ * The next point on a pig's way to `to`, round the hidey huts: in and out only by the open front, and round the back
+ * and sides of any hut in the way (a corner at a time). `to` itself when no hut is in the way.
+ */
+export function hutStep(from: P, to: P, radius: number): P {
+  for (const h of hideys()) {
+    const b = hutRect(h)
+    const slack = radius - 0.05 // pigs pushed against a wall can still slide off along it
+    const walls = hutWalls(h).map((w) => r(w.x0 - slack, w.x1 + slack, w.z0 - slack, w.z1 + slack))
+    const blocked = (a: P, c: P) => walls.some((w) => crosses(a, c, w))
+    const door = { x: h.x, z: b.z1 + radius + 0.4 }
+    // In the hut, or standing in its mouth.
+    const fromIn = inRect(from, { ...b, z1: b.z1 + radius + 0.1 }) && Math.abs(from.x - h.x) < HIDEY_W / 2
+    if (fromIn && inRect(to, b)) continue
+    // Inside, heading out the back or a side: out of the front first.
+    if (fromIn) {
+      if (blocked(from, to)) return door
+      continue
+    }
+    // Heading in (not lined up with the front yet), or past: round the hut to the front, or past it.
+    const goal = inRect(to, b) ? door : to
+    if (!blocked(from, inRect(to, b) ? to : goal)) continue
+    if (goal === door && !blocked(from, door) && dist(from, door) > 0.2) return door
+    // The shortest way round by the corners (a little search over from, the four corners and the goal).
+    const pad = radius + 0.45
+    const nodes = [
+      from,
+      { x: b.x0 - pad, z: b.z0 - pad },
+      { x: b.x1 + pad, z: b.z0 - pad },
+      { x: b.x1 + pad, z: b.z1 + pad },
+      { x: b.x0 - pad, z: b.z1 + pad },
+      goal,
+    ]
+    const best = nodes.map(() => Infinity)
+    const first = nodes.map(() => -1)
+    best[0] = 0
+    const done = new Set<number>()
+    while (done.size < nodes.length) {
+      let i = -1
+      for (let k = 0; k < nodes.length; k++) if (!done.has(k) && (i < 0 || best[k] < best[i])) i = k
+      if (best[i] === Infinity) break
+      done.add(i)
+      for (let j = 1; j < nodes.length; j++) {
+        if (done.has(j) || blocked(nodes[i], nodes[j])) continue
+        const d = best[i] + dist(nodes[i], nodes[j])
+        if (d < best[j]) {
+          best[j] = d
+          first[j] = i === 0 ? j : first[i]
+        }
+      }
+    }
+    if (first[5] > 0) return nodes[first[5]]
+  }
+  return to
+}
+
 /** Pushes a circle out of every rect it overlaps (in place). Sliding along walls falls out of this. */
 export function pushOut(p: P, radius: number, solids: Rect[]): void {
   for (const b of solids) {
@@ -441,6 +532,104 @@ export function settleRaider(p: P, radius: number): void {
   const gs = gardens()
   pushOut(p, radius, PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)))
   clampTo(p, BOUNDS, radius)
+}
+
+/**
+ * A sneaky pig's way to a veg bed: round the barn walls (out through the door), trees, the pond and the hay field, then
+ * under the garden fence. A grid search on the owned land, straightened out wherever there's a clear line. Waypoints
+ * after `from`, ending at `to`; null if there's no way (`extra`: more in the way, like the shut barn door).
+ */
+export function raidPath(from: P, to: P, radius: number, extra: Rect[] = []): P[] | null {
+  const gs = gardens()
+  const solids = [...PIG_SOLIDS.filter((b) => !gs.includes(b as Garden)), ...extra]
+  const CELL = 0.5
+  const cols = Math.ceil((BOUNDS.x1 - BOUNDS.x0) / CELL)
+  const rows = Math.ceil((BOUNDS.z1 - BOUNDS.z0) / CELL)
+  const at = (i: number): P => ({ x: BOUNDS.x0 + ((i % cols) + 0.5) * CELL, z: BOUNDS.z0 + (Math.floor(i / cols) + 0.5) * CELL })
+  const cell = (p: P) =>
+    Math.max(0, Math.min(rows - 1, Math.floor((p.z - BOUNDS.z0) / CELL))) * cols + Math.max(0, Math.min(cols - 1, Math.floor((p.x - BOUNDS.x0) / CELL)))
+  const open = (p: P) => onFarm(p) && inRect(p, BOUNDS, -radius) && !solids.some((b) => inRect(p, b, radius + 0.05))
+  const clear = (a: P, b: P) => !solids.some((s) => crosses(a, b, { x0: s.x0 - radius, x1: s.x1 + radius, z0: s.z0 - radius, z1: s.z1 + radius }))
+  const start = cell(from)
+  const goal = cell(to)
+  // A* over the cells (8 ways), never cutting a blocked corner.
+  const cost = new Float64Array(cols * rows).fill(Infinity)
+  const prev = new Int32Array(cols * rows).fill(-1)
+  const free = new Int8Array(cols * rows) // 0 unknown, 1 free, 2 blocked
+  const isFree = (i: number) => {
+    if (!free[i]) free[i] = i === start || i === goal || open(at(i)) ? 1 : 2
+    return free[i] === 1
+  }
+  const h = (i: number) => dist(at(i), at(goal))
+  const queue: [number, number][] = [[h(start), start]]
+  cost[start] = 0
+  const push = (f: number, i: number) => {
+    // A little binary heap on f.
+    queue.push([f, i])
+    for (let k = queue.length - 1; k > 0; ) {
+      const up = (k - 1) >> 1
+      if (queue[up][0] <= queue[k][0]) break
+      ;[queue[up], queue[k]] = [queue[k], queue[up]]
+      k = up
+    }
+  }
+  const pop = () => {
+    const top = queue[0]
+    const last = queue.pop()!
+    if (queue.length) {
+      queue[0] = last
+      for (let k = 0; ; ) {
+        const l = 2 * k + 1
+        const r = l + 1
+        let m = k
+        if (l < queue.length && queue[l][0] < queue[m][0]) m = l
+        if (r < queue.length && queue[r][0] < queue[m][0]) m = r
+        if (m === k) break
+        ;[queue[m], queue[k]] = [queue[k], queue[m]]
+        k = m
+      }
+    }
+    return top
+  }
+  while (queue.length) {
+    const [, i] = pop()
+    if (i === goal) break
+    const cx = i % cols
+    const cz = Math.floor(i / cols)
+    for (let dz = -1; dz <= 1; dz++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue
+        const nx = cx + dx
+        const nz = cz + dz
+        if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue
+        const j = nz * cols + nx
+        if (!isFree(j) || (dx && dz && (!isFree(cz * cols + nx) || !isFree(nz * cols + cx)))) continue
+        const c = cost[i] + (dx && dz ? Math.SQRT2 : 1)
+        if (c >= cost[j]) continue
+        cost[j] = c
+        prev[j] = i
+        push(c + h(j), j)
+      }
+  }
+  if (cost[goal] === Infinity) return null
+  const cells: P[] = []
+  for (let i = prev[goal]; i !== -1 && i !== start; i = prev[i]) cells.unshift(at(i))
+  // Straighten: from each point, jump to the furthest one in plain sight.
+  const path: P[] = []
+  const points = [...cells, to]
+  let here = from
+  for (let k = 0; k < points.length; ) {
+    let far = k
+    for (let j = points.length - 1; j > k; j--)
+      if (clear(here, points[j])) {
+        far = j
+        break
+      }
+    path.push(points[far])
+    here = points[far]
+    k = far + 1
+  }
+  return path
 }
 
 /** True if a point is somewhere a pig can stand, with some room around it. */

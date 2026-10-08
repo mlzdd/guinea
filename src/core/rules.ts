@@ -92,12 +92,14 @@ export const HOPPER_MAX = 60
 export const SACK_PELLETS = 40
 /**
  * Pellets are rationed: the feed bin holds one sack a day for each hopper (restocked at dawn). Hay is the main food:
- * as much as they like, fetched an armful at a time from the hay meadow's stacks into the racks in the barn.
+ * as much as they like, fetched an armful at a time (off the hay table's bale, or from the hay meadow) into the racks.
  */
 export const HAY_RACK_MAX = 40
 export const HAY_ARMFUL = 20
 /** Hay goes in the basket: each armful takes this many places in it. */
 export const HAY_SLOTS = 2
+/** The hay table by the feed bin: a bale of this many armfuls, delivered every dawn, so there's hay from day one. */
+export const BALE_ARMFULS = 6
 /** Armfuls a haystack in the stack yard can hold. */
 export const HAY_STACK_MAX = 6
 /** A cut patch of the hay meadow grows back in this long. */
@@ -139,14 +141,16 @@ export const SNACK_TRIP = 0.3
 export const FRIEND_SEEK = 0.55
 export const FRIEND_STAY = 0.35
 /**
- * Sneaky piggies (about a third of them, `isSneaky`) sometimes squeeze under a veg patch fence when they're peckish
+ * Sneaky piggies (nearly half of them, `isSneaky`) sometimes squeeze under a veg patch fence when they're peckish
  * (RAID_CHANCE each time they pick what to do by day) and munch away at a growing bed with no farmer near it. It fills
  * them up, but the bed doesn't grow while they're in it. They squeeze back out when full, after RAID_MS, at dusk, or
  * when a farmer comes within RAID_SPOOK.
  */
-export const SNEAKY = 0.3
+export const SNEAKY = 0.45
 export const isSneaky = (pigId: number) => (pigId * 0.7548) % 1 < SNEAKY
-export const RAID_CHANCE = 0.2
+export const RAID_CHANCE = 0.5
+/** How far a sneaky pig will trek to a veg patch (any patch on the farm). */
+export const RAID_RANGE = 50
 export const RAID_MS: [number, number] = [20_000, 40_000]
 export const RAID_SPOOK = 3
 /**
@@ -274,8 +278,8 @@ const landUpgrade = (needs: SquareId, ...tiers: [number, string, string][]): Upg
 })
 const UPGRADE_LIST = {
   land_barn: landUpgrade('barn',
-    [45, 'Deep hay racks', 'Each barn rack holds 80 bites of hay instead of 40.'],
-    [95, 'Feed pantry', 'One extra pellet sack every dawn, plus one now.'],
+    [45, 'Deep hay racks', 'Each hay rack holds 80 bites of hay instead of 40, and two more racks go up: one inside by the door, one outside.'],
+    [95, 'Feed pantry', 'One extra pellet sack every dawn (plus one now), and two more hay racks on the side walls.'],
     [180, 'Snug bedding', 'Sleeping pigs in the barn get hungry half as fast.']),
   land_yard: landUpgrade('yard',
     [35, 'Clover lawn', 'Grazing in the yard fills tummies twice as fast.'],
@@ -413,7 +417,7 @@ export const JOBS: Partial<Record<Stat, { goal: number; text: string; needs?: Sq
   fed: { goal: 20, text: 'Throw the piggies {n} veg' },
   fill: { goal: 4, text: 'Fill the bowls {n} times' },
   pour: { goal: 1, text: 'Top up the pellet hopper' },
-  hay: { goal: 3, text: 'Put out {n} armfuls of hay', needs: 'meadow' },
+  hay: { goal: 3, text: 'Put out {n} armfuls of hay' },
   fix: { goal: 3, text: 'Fix {n} health problems' },
   cuddle: { goal: 5, text: 'Cuddle {n} piggies' },
   shoo: { goal: 2, text: 'Shoo away {n} foxes or hawks' },

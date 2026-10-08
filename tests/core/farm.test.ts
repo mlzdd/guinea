@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { lonePig, ownAll, run, seeded, setup, veg } from './helpers.ts'
 import { Farm, HOPPER_ID, RACK_ID } from '../../src/core/farm.ts'
-import { BED_SPOTS, BEDS, BOWLS, SALAD_SPOT, FEED_BIN, HAY_PATCHES, HAY_RACKS, HAY_STACKS, HOPPERS, center, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
+import { BED_SPOTS, BEDS, BOWLS, SALAD_SPOT, FEED_BIN, HAY_BALE, HAY_PATCHES, HAY_FIELD, HAY_RACKS, HAY_STACKS, HOPPERS, center, rackBuilt, rackFront, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
 import { parseClientMsg } from '../../src/core/protocol.ts'
 import {
+  BALE_ARMFULS,
   BASKET_MAX,
   BOWL_MAX,
   GROW_MS,
@@ -531,6 +532,36 @@ describe('pellets', () => {
 })
 
 describe('hay', () => {
+  it('a bale of hay on the hay table, from day one: as much as fits in your basket, a new one every dawn', () => {
+    const { farm, id, me } = setup()
+    expect(farm.snapshot().bale).toBe(BALE_ARMFULS)
+    expect(parseClientMsg(JSON.stringify({ t: 'bale' }))).toEqual({ t: 'bale' })
+    // Too far away.
+    farm.handle(id, { t: 'bale' })
+    expect(me.hay).toBe(0)
+
+    // Room for two armfuls.
+    Object.assign(me, { x: HAY_BALE.x, z: HAY_BALE.z + 1 })
+    me.basket[0] = BASKET_MAX - 2 * HAY_SLOTS
+    farm.handle(id, { t: 'bale' })
+    expect(me.hay).toBe(2)
+    expect(farm.bale).toBe(BALE_ARMFULS - 2)
+    me.basket[0] = 0
+    farm.handle(id, { t: 'bale' })
+    expect(me.hay).toBe(BALE_ARMFULS)
+    expect(farm.snapshot().bale).toBe(0)
+
+    // Into the rack; the pigs come for it.
+    Object.assign(me, { x: HAY_RACKS[0].x, z: HAY_RACKS[0].z + 1.2 })
+    farm.handle(id, { t: 'rack', rack: 0 })
+    expect(farm.foods.get(RACK_ID)!.bites).toBe(HAY_RACK_MAX)
+
+    // That was today's bale; it's kept in the save, and there's a new one at dawn.
+    expect(new Farm(seeded(2), JSON.parse(JSON.stringify(farm.save()))).bale).toBe(0)
+    farm.payDay()
+    expect(farm.bale).toBe(BALE_ARMFULS)
+  })
+
   it('farmers cut armfuls of hay into their basket and take them to the racks, and pigs eat it', () => {
     const { farm, id, me } = setup()
     const rack = farm.foods.get(RACK_ID)!
@@ -586,6 +617,40 @@ describe('hay', () => {
     expect(me.hay).toBe(BASKET_MAX / HAY_SLOTS - HAY_RACK_MAX / HAY_ARMFUL)
     farm.handle(id, { t: 'rack', rack: 2 })
     expect(me.hay).toBe(BASKET_MAX / HAY_SLOTS - HAY_RACK_MAX / HAY_ARMFUL)
+  })
+
+  it('racks round the barn, inside and out, and more go up with the barn improvements', () => {
+    const { farm, id, me } = setup()
+    const fill = (i: number) => {
+      const front = rackFront(HAY_RACKS[i], 1.2)
+      Object.assign(me, front, { hay: 2, basket: [0, 0, 0, 0, 0] })
+      farm.handle(id, { t: 'rack', rack: i })
+      return farm.foods.get(RACK_ID + i)!.bites
+    }
+    const open = HAY_RACKS.map((_, i) => i).filter((i) => rackBuilt(i, farm.upgrades))
+    expect(open.length).toBeGreaterThanOrEqual(5)
+    expect(open.some((i) => !isInside(rackFront(HAY_RACKS[i])))).toBe(true) // one outside
+    for (const i of open) expect(fill(i)).toBe(HAY_RACK_MAX)
+    // Not through the barn wall: the outside one by the door from inside.
+    const out = open.find((i) => !isInside(rackFront(HAY_RACKS[i])))!
+    farm.foods.get(RACK_ID + out)!.bites = 0
+    Object.assign(me, { x: HAY_RACKS[out].x, z: HAY_RACKS[out].z - 1.5, hay: 2 })
+    farm.handle(id, { t: 'rack', rack: out })
+    expect(farm.foods.get(RACK_ID + out)!.bites).toBe(0)
+
+    const later = HAY_RACKS.map((_, i) => i).filter((i) => !rackBuilt(i, farm.upgrades))
+    expect(later.length).toBeGreaterThanOrEqual(2)
+    expect(fill(later[0])).toBe(0)
+    farm.coins = 1000
+    farm.handle(id, { t: 'buy', upgrade: 'land_barn' })
+    farm.handle(id, { t: 'buy', upgrade: 'land_barn' })
+    for (const i of later) expect(fill(i)).toBe(2 * HAY_ARMFUL)
+    // Every rack's hay is where pigs can get at it.
+    for (const r of HAY_RACKS) expect(pigCanStand(rackFront(r))).toBe(true)
+  })
+
+  it('the stack yard is down the right of the hay field, nearest the barn', () => {
+    for (const s of HAY_STACKS) expect(s.x).toBeGreaterThan(HAY_FIELD.x1)
   })
 
   it('a cut patch grows back before it can be cut again', () => {

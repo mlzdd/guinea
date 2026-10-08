@@ -87,6 +87,10 @@ export function mood(p: PigSnap): string {
 }
 
 /** The DOM overlay. */
+
+export type CalloutStyle = 'dawn' | 'dusk' | 'night' | 'cheer'
+/** How long each callout stays up (matches the animation in style.css). */
+const CALLOUT_MS = 2800
 export class Hud {
   private readonly check = $('check')
   private checkPig: number | null = null
@@ -95,6 +99,9 @@ export class Hud {
   private todayKey = ''
   private checked = new Map<Check, number>() // when each check finishes
   private lastAlert = new Map<string, number>()
+  /** Callouts waiting their turn in the middle of the screen, and whether one is showing. */
+  private callouts: { title: string; sub: string; style: CalloutStyle }[] = []
+  private calling = false
 
   /** A basket slot was clicked (veg index, or VEGGIES.length for the hay). */
   onSlot: (i: number) => void = () => {}
@@ -209,7 +216,7 @@ export class Hud {
       <p class="hint">Everyone who’s ever farmed here, all time. <kbd>L</kbd> to close</p>`
   }
 
-  alert(kind: AlertKind, text: string) {
+  alert(kind: AlertKind, text: string, cheer = false) {
     // Don't spam the same line.
     const now = performance.now()
     if ((this.lastAlert.get(text) ?? -1e9) > now - 3000) return
@@ -223,6 +230,29 @@ export class Hud {
     setTimeout(() => line.classList.add('old'), 9000)
     setTimeout(() => line.remove(), 10_000)
     if (kind === 'fox' || kind === 'hawk') this.toast(text, 'danger')
+    if (cheer) this.callout(text, '', 'cheer')
+  }
+
+  /** A big announcement in the middle of the screen (dawn, dusk, night, celebrations), one at a time. */
+  callout(title: string, sub: string, style: CalloutStyle) {
+    this.callouts.push({ title, sub, style })
+    // Don't let a pile-up keep going for ages: just the latest few.
+    if (this.callouts.length > 3) this.callouts.splice(0, this.callouts.length - 3)
+    if (!this.calling) this.nextCallout()
+  }
+
+  private nextCallout() {
+    const next = this.callouts.shift()
+    this.calling = !!next
+    if (!next) return
+    const el = $('callout')
+    el.className = next.style
+    el.innerHTML = `${next.style === 'cheer' ? '<div class="confetti">🎉 ✨ 🎊</div>' : ''}<div class="big"></div><div class="sub"></div>`
+    el.querySelector('.big')!.textContent = next.title
+    el.querySelector('.sub')!.textContent = next.sub
+    void el.offsetWidth // restart the animation
+    el.classList.add('show')
+    setTimeout(() => this.nextCallout(), CALLOUT_MS)
   }
 
   setBasket(counts: number[], selected: number, max: number, hay: number) {
@@ -407,7 +437,7 @@ export class Hud {
     while (el.children.length < list.length) {
       const a = document.createElement('div')
       a.className = 'arrow'
-      a.innerHTML = '<i>➤</i><span></span>'
+      a.innerHTML = '<b></b><i>➤</i><span></span>'
       el.append(a)
     }
     ;[...el.children].forEach((child, i) => {
@@ -417,7 +447,7 @@ export class Hud {
       if (!item) return
       a.style.left = `${item.x}px`
       a.style.top = `${item.y}px`
-      ;(a.firstElementChild as HTMLElement).style.transform = `rotate(${item.angle}rad)`
+      ;(a.firstElementChild as HTMLElement).style.transform = `rotate(${item.angle}rad) translateX(44px)` // out in front of the icon
       a.lastElementChild!.textContent = item.icon
     })
   }

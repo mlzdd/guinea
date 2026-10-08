@@ -14,6 +14,7 @@ import {
   FEED_BIN,
   FENCE_EDGES,
   FOX_SOLIDS,
+  HAY_BALE,
   HAY_PATCHES,
   HAY_RACKS,
   HAY_STACKS,
@@ -38,11 +39,15 @@ import {
   onFarm,
   owns,
   pigCanStand,
+  rackBuilt,
+  rackFront,
   setLand,
   square,
   squareAt,
   trees,
   pushOut,
+  hutStep,
+  raidPath,
   settleFarmer,
   settlePig,
   settleRaider,
@@ -110,6 +115,7 @@ import {
   HERD_RADIUS,
   HERD_SPEED,
   HERD_STEP,
+  BALE_ARMFULS,
   HAY_ARMFUL,
   hayRackMax,
   HAY_REGROW_MS,
@@ -186,6 +192,7 @@ import {
   FRIEND_STAY,
   RAID_CHANCE,
   RAID_MS,
+  RAID_RANGE,
   RAID_SPOOK,
   isSneaky,
   SHOO_COOLDOWN_MS,
@@ -261,6 +268,8 @@ export interface Pig extends PigLook {
   raid: number | null
   /** When it started munching (0 = still squeezing in). */
   munchFrom: number
+  /** A raider's way to its bed (waypoints still to go), round everything in the way. */
+  path: P[]
 }
 
 /** Food on the ground, or a fixed source: bowls are ids 0..3, hoppers 4..5, and they never go away. */
@@ -352,6 +361,7 @@ export interface FarmSave {
   salad?: number[]
   saladServed?: boolean
   sacks?: number
+  bale?: number
   racks?: number[]
   /** Ms until each hay patch is ready again, and the haystacks. */
   hayLeft?: number[]
@@ -447,6 +457,8 @@ export class Farm {
   baskets = new Map<string, { basket: number[]; hay: number }>()
   /** Sacks of pellets left in the feed bin today: one per hopper, restocked at dawn. */
   sacks = 1
+  /** Armfuls left on the hay table's bale today (a new bale every dawn). */
+  bale = BALE_ARMFULS
   /** The last day everyone was reminded to serve the salad. */
   private saladCalled = 0
   /** Treat of the day: the veg the pigs are craving. */
@@ -484,7 +496,7 @@ export class Farm {
     HAY_RACKS.forEach((r, i) => {
       // Pigs eat the hay that falls on the floor in front of the rack.
       const id = RACK_ID + i
-      this.foods.set(id, { id, kind: 'hay', x: r.x, z: r.z + 0.5, bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
+      this.foods.set(id, { id, kind: 'hay', ...rackFront(r), bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
     })
     if (save) this.load(save)
     setLand(this.land)
@@ -539,6 +551,7 @@ export class Farm {
       follow: null,
       raid: null,
       munchFrom: 0,
+      path: [],
     }
   }
 
@@ -714,6 +727,14 @@ export class Farm {
           this.sacks--
         }
         return
+      case 'bale': {
+        // The hay table: as many armfuls off today's bale as fit in your basket.
+        if (f.holding !== null || f.sack || dist(f, HAY_BALE) > REACH) return
+        const n = Math.min(this.bale, Math.floor(this.basketRoom(f) / HAY_SLOTS))
+        f.hay += n
+        this.bale -= n
+        return
+      }
       case 'hay':
         // Cut an armful from a patch of the hay meadow into your basket (the patch grows back).
         if (f.holding !== null || f.sack || !owns('meadow') || !inRect(f, HAY_PATCHES[msg.patch], 0.8)) return
@@ -734,7 +755,7 @@ export class Farm {
       case 'rack': {
         // As many armfuls as the rack has room for.
         const rack = this.foods.get(RACK_ID + msg.rack)!
-        if (!f.hay || dist(f, HAY_RACKS[msg.rack]) > REACH || rack.bites >= hayRackMax(this.upgrades)) return
+        if (!f.hay || !rackBuilt(msg.rack, this.upgrades) || dist(f, HAY_RACKS[msg.rack]) > REACH || isInside(f) !== isInside(rackFront(HAY_RACKS[msg.rack])) || rack.bites >= hayRackMax(this.upgrades)) return
         const n = Math.min(f.hay, Math.ceil((hayRackMax(this.upgrades) - rack.bites) / HAY_ARMFUL))
         f.hay -= n
         rack.bites = Math.min(hayRackMax(this.upgrades), rack.bites + n * HAY_ARMFUL)
@@ -858,7 +879,7 @@ export class Farm {
     this.salad = VEGGIES.map(() => 0)
     this.saladServed = true
     this.today.salad = kinds
-    this.alert('fun', `🥗 ${f.name} served the salad platter (${kinds} kinds of veg)! Everyone in for supper!`)
+    this.alert('fun', `🥗 ${f.name} served the salad platter (${kinds} kinds of veg)! Everyone in for supper!`, true)
     this.credit(f.name, 'salad')
     this.excite(platter, 200)
     // The ones too full to eat head in anyway.
@@ -875,7 +896,7 @@ export class Farm {
       job.n = Math.min(job.goal, job.n + n)
       if (job.n < job.goal) continue
       this.coins += JOB_PAY
-      this.alert('job', `✅ Job done: ${this.jobText(job)}! +${JOB_PAY} 🪙`)
+      this.alert('job', `✅ Job done: ${this.jobText(job)}! +${JOB_PAY} 🪙`, true)
     }
   }
 
@@ -1032,7 +1053,7 @@ export class Farm {
     if (this.zoomMeter >= 1) {
       this.zoomMeter = 0
       this.zoomiesUntil = this.t + ZOOMIES_MS
-      this.alert('fun', '🎉 ZOOMIES! The piggies have gone completely wild!')
+      this.alert('fun', '🎉 ZOOMIES! The piggies have gone completely wild!', true)
       for (const p of this.pigs) if (CALM.includes(p.state) && p.happy >= ZOOMIES_HAPPY) this.zoom(p)
     }
 
@@ -1407,14 +1428,15 @@ export class Farm {
     }
     // Everyone likes to hang out with their best friend.
     const friend = this.buddy(p, p.friend)
+    // Sneaky ones squeeze into a veg patch for a munch, when nobody's looking.
+    // (Even from the barn, if the door's open: they know the way.)
+    if (!(inside && this.doorShut) && !this.evening && !this.raining && p.hunger < FULL && isSneaky(p.id) && this.rand() < RAID_CHANCE) {
+      const bed = this.raidTarget(p)
+      if (bed !== null && this.startRaid(p, bed)) return
+    }
     if (friend && dist(p, friend) > 2.5 && this.rand() < FRIEND_SEEK) return this.walk(p, this.beside(p, friend), 'wander')
     // Together: often just stay there, side by side, nibbling or sitting.
     if (friend && dist(p, friend) <= 2.5 && this.rand() < FRIEND_STAY) return this.setState(p, !inside && this.rand() < 0.5 ? 'graze' : 'idle', this.between(3000, 7000))
-    // Sneaky ones squeeze into a veg patch for a munch, when nobody's looking.
-    if (!inside && !this.evening && !this.raining && p.hunger < SNACKY && isSneaky(p.id) && this.rand() < RAID_CHANCE) {
-      const bed = this.raidTarget(p)
-      if (bed !== null) return this.startRaid(p, bed)
-    }
     if (p.hunger < FULL && !this.raining && !(inside && this.doorShut) && this.rand() < SNACK_TRIP * (inside ? 1 - p.homebody : 1))
       return this.walk(p, this.snackSpot(), 'wander')
     if (p.issues & ISSUE_BIT.mites && this.rand() < 0.25) return this.setState(p, 'scratch', 1800)
@@ -1434,7 +1456,7 @@ export class Farm {
   private raidTarget(p: Pig): number | null {
     let best: number | null = null
     BEDS.forEach((bed, i) => {
-      if (!this.bedOpen(i) || this.beds[i].stage !== 'growing' || dist(p, bed) > 30) return
+      if (!this.bedOpen(i) || this.beds[i].stage !== 'growing' || dist(p, bed) > RAID_RANGE) return
       if (this.pigs.some((q) => q.raid === i)) return
       if ([...this.farmers.values()].some((f) => dist(f, bed) < RAID_SPOOK + 4)) return
       if (best === null || dist(p, bed) < dist(p, BEDS[best])) best = i
@@ -1442,13 +1464,18 @@ export class Farm {
     return best
   }
 
-  private startRaid(p: Pig, bed: number) {
+  /** Off to raid a bed, by a way round everything (false if there's no way there). */
+  private startRaid(p: Pig, bed: number): boolean {
     const b = BEDS[bed]
-    this.walk(p, { x: b.x + ((p.id % 3) - 1) * 0.6, z: b.z + 0.4 }, 'raid')
+    const spot = { x: b.x + ((p.id % 3) - 1) * 0.6, z: b.z + 0.4 }
+    const path = raidPath(p, spot, PIG_RADIUS, this.doorShut ? [DOOR_GATE] : [])
+    if (!path) return false
+    this.walk(p, spot, 'raid')
     p.raid = bed
     p.munchFrom = 0
+    p.path = path
     p.until = this.t + 60_000 // gives up if it can't get there
-    this.alert('fun', `🤫 ${p.name} has sneaked into the veg patch! (the ${b.kind}s won't grow while they're munching)`)
+    return true
   }
 
   /** Squeezing in, munching, squeezing back out. */
@@ -1463,11 +1490,20 @@ export class Farm {
     }
     const caught = [...this.farmers.values()].find((f) => dist(f, p) < RAID_SPOOK)
     if (caught || this.evening || this.raining || this.t >= p.until || p.hunger >= FULL || this.beds[p.raid].stage !== 'growing') return this.leaveRaid(p, caught)
-    if (!this.moveTo(p, { x: p.tx, z: p.tz }, PIG_WALK * 1.3 * this.pace(p, 'walk'), dt, 0.25)) return
+    // Along its way (round the barn, trees and all), then in under the fence to the bed.
+    const speed = PIG_WALK * 1.3 * this.pace(p, 'walk')
+    if (p.path.length > 1) {
+      if (this.moveTo(p, p.path[0], speed, dt, 0.35)) p.path.shift()
+      return
+    }
+    if (!this.moveTo(p, { x: p.tx, z: p.tz }, speed, dt, 0.25)) return
+    p.path = []
     const bed = BEDS[p.raid]
     if (!p.munchFrom) {
       p.munchFrom = this.t
       p.until = this.t + this.between(...RAID_MS)
+      // Only now it's in there, for everyone to see.
+      this.alert('fun', `🤫 ${p.name} has sneaked into the veg patch! (the ${bed.kind}s won't grow while they're munching)`)
     }
     p.yaw = yawTowards(p, bed)
     if (this.t >= p.nextBite) {
@@ -1499,6 +1535,7 @@ export class Farm {
     }
     this.walk(p, exit, 'raid')
     p.raid = null
+    p.path = []
     if (caught && bed) this.alert('fun', `🥬 Caught! ${caught.name} found ${p.name} munching the ${bed.kind}s. Off you pop!`)
   }
 
@@ -1565,7 +1602,9 @@ export class Farm {
     p.follow = leader?.id ?? null
     const behind = leader && { x: leader.x - facing(leader.yaw).x * TRAIN_GAP, z: leader.z - facing(leader.yaw).z * TRAIN_GAP }
     const goal = behind ?? to
-    const step = nextStep(p, goal, (((p.id * 0.618) % 1) - 0.5) * 2)
+    let step = nextStep(p, goal, (((p.id * 0.618) % 1) - 0.5) * 2)
+    // Round the hidey huts, and into them only by the front.
+    step = hutStep(p, step, PIG_RADIUS)
     const final = !behind && step === to
     const dx = step.x - p.x
     const dz = step.z - p.z
@@ -1958,7 +1997,7 @@ export class Farm {
       this.flee(p)
       this.today.saves++
       this.credit(by, 'save')
-      this.alert('saved', `🎉 ${by} saved ${p.name} from the ${pred.kind}!`)
+      this.alert('saved', `🎉 ${by} saved ${p.name} from the ${pred.kind}!`, true)
     } else {
       this.alert('saved', `${by} shooed the ${pred.kind} away!`)
     }
@@ -2081,7 +2120,7 @@ export class Farm {
       winner.rosettes = (winner.rosettes ?? 0) + 1
       this.pigChanged(winner)
       lines.push({ label: `🏆 Pig show: ${winner.name} won Best in Show!`, coins: SHOW_PRIZE })
-      this.alert('fun', `🏆 ${winner.name}${winner.adopter ? ` (${winner.adopter}’s piggy)` : ''} won Best in Show!`)
+      this.alert('fun', `🏆 ${winner.name}${winner.adopter ? ` (${winner.adopter}’s piggy)` : ''} won Best in Show!`, true)
     }
     const total = Math.max(0, lines.reduce((a, l) => a + l.coins, 0))
     const stars = 1 + STARS.filter((s) => total >= s).length
@@ -2101,6 +2140,8 @@ export class Farm {
     this.today = newDayStats()
     // The feed bin is restocked: a sack for each hopper.
     this.sacks = HOPPERS.filter((_, i) => this.hopperBuilt(i)).length + extraSacks(this.upgrades)
+    // …and a new bale of hay on the hay table.
+    this.bale = BALE_ARMFULS
     // Last night's leftovers get cleared away; a new platter can be made.
     this.saladServed = false
     this.foods.get(SALAD_ID)!.bites = 0
@@ -2144,7 +2185,7 @@ export class Farm {
         if (this.days - (p.born ?? 0) >= PUP_DAYS) {
           p.age = 1
           this.pigChanged(p)
-          this.alert('baby', `🎂 ${p.name} is all grown up!`)
+          this.alert('baby', `🎂 ${p.name} is all grown up!`, true)
         }
       } else if (boar && coming + LITTER_MIN <= herdMax(this.upgrades) && p.sex === 'sow' && !AWAY.includes(p.state) && p.happy >= PREGNANT_HAPPY && p.hunger >= 50) {
         if (this.rand() < (PREGNANCY_PER_DAY * pregnancyRate(this.upgrades) * dtMs) / dayLength(this.day)) {
@@ -2159,7 +2200,7 @@ export class Farm {
     p.due = this.days + PREGNANCY_DAYS
     p.careGood = p.careTotal = 0
     this.pigChanged(p)
-    this.alert('baby', `🤰 ${p.name} is expecting! Keep her well fed and happy for a bigger litter`)
+    this.alert('baby', `🤰 ${p.name} is expecting! Keep her well fed and happy for a bigger litter`, true)
   }
 
   /** 2–5 pups (5 is rare); fewer if mum wasn't looked after (and never more than the barn has room for). */
@@ -2191,14 +2232,15 @@ export class Farm {
     }
     const names = pups.map((p) => p.name)
     const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
-    this.alert('baby', size === 1 ? `🐣 ${mum.name} had a baby! Say hello to little ${list}` : `🐣 ${mum.name} had ${size} babies! Say hello to ${list}`)
+    this.alert('baby', size === 1 ? `🐣 ${mum.name} had a baby! Say hello to little ${list}` : `🐣 ${mum.name} had ${size} babies! Say hello to ${list}`, true)
     return pups
   }
 
   // ---------------------------------------------------------------- output
 
-  private alert(kind: AlertKind, text: string) {
-    this.out.push({ to: 'all', msg: { t: 'alert', kind, text } })
+  /** `cheer`: a celebration (called out in the middle of the screen). */
+  private alert(kind: AlertKind, text: string, cheer = false) {
+    this.out.push({ to: 'all', msg: cheer ? { t: 'alert', kind, text, cheer } : { t: 'alert', kind, text } })
   }
 
   snapshot(): Extract<ServerMsg, { t: 'snap' }> {
@@ -2245,6 +2287,7 @@ export class Farm {
       }),
       hoppers: HOPPERS.map((_, i) => this.foods.get(HOPPER_ID + i)!.bites),
       sacks: this.sacks,
+      bale: this.bale,
       racks: HAY_RACKS.map((_, i) => this.foods.get(RACK_ID + i)!.bites),
       hayField: this.hayField.map((at) => r2(Math.max(0, Math.min(1, 1 - (at - this.t) / hayRegrowMs(this.upgrades))))),
       stacks: [...this.hayStacks],
@@ -2298,6 +2341,7 @@ export class Farm {
       bowls: BOWLS.map((_, i) => this.foods.get(i)!.bites),
       hoppers: HOPPERS.map((_, i) => this.foods.get(HOPPER_ID + i)!.bites),
       sacks: this.sacks,
+      bale: this.bale,
       racks: HAY_RACKS.map((_, i) => this.foods.get(RACK_ID + i)!.bites),
       hayLeft: this.hayField.map((at) => Math.max(0, at - this.t)),
       hayStacks: [...this.hayStacks],
@@ -2372,6 +2416,7 @@ export class Farm {
         const hay = num(b?.hay) ? Math.max(0, Math.round(b.hay)) : 0
         if (veg && veg.reduce((a, n) => a + n, 0) + hay * HAY_SLOTS <= basketMax(this.upgrades)) this.baskets.set(name.slice(0, 16), { basket: veg, hay })
       }
+    if (num(s.bale)) this.bale = Math.max(0, Math.min(BALE_ARMFULS, Math.round(s.bale!)))
     if (Array.isArray(s.hayStacks))
       s.hayStacks.slice(0, HAY_STACKS.length).forEach((n, i) => {
         if (num(n)) this.hayStacks[i] = Math.max(0, Math.min(hayStackMax(this.upgrades), Math.round(n)))

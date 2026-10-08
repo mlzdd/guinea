@@ -43,9 +43,9 @@ export const veg = (name: (typeof VEGGIES)[number]) => VEGGIES.indexOf(name)
 export function lonePig(farm: Farm, x: number, z: number, hunger = 30): Pig {
   for (const p of farm.pigs) {
     p.hunger = 100
-    // The strip of hay meadow beside the field.
-    p.x = -30.3
-    p.z = -15
+    // The strip of hay meadow below the field.
+    p.x = -24
+    p.z = -9.5
     p.state = 'sleep'
     p.until = Infinity
   }
