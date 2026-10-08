@@ -226,7 +226,12 @@ form.addEventListener('submit', (e) => {
   error.textContent = ''
   nameInput.blur()
   // A phone goes full screen and sideways (where it can: not iPhones), during the tap so the browser allows it.
-  if (TOUCH) fullScreen()
+  if (TOUCH) {
+    fullScreen()
+    // Switching away (a call, the lock screen) drops full screen, and the browser only lets it come back from a tap:
+    // the first tap back in the game puts it back. (Touch only counts as a tap when the finger lifts.)
+    addEventListener('touchend', fullScreen, { capture: true, passive: true })
+  }
   // Play during the join gesture so browsers can allow audible playback.
   startMusic()
   net.send({ t: 'join', name, color })
