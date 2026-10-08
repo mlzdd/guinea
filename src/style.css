@@ -842,10 +842,33 @@ kbd {
   pointer-events: auto;
 }
 
+/* The name, with Adopt, Rename and (touch) Hide along the same line. */
+#check .ck-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 #check h3 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
   font-size: 34px;
   line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#check button.small {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  font-size: 13px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 #check .who {
@@ -895,10 +918,20 @@ kbd {
   background: var(--red);
 }
 
+/* Fixed columns: the buttons (Check, then the fix) always sit in the same place whatever the result says. */
 #check table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 16px;
+}
+
+#check col.ic {
+  width: 30px;
+}
+
+#check col.act {
+  width: 96px;
 }
 
 #check td {
@@ -906,18 +939,26 @@ kbd {
   vertical-align: middle;
 }
 
-#check td:first-child {
-  width: 28px;
+#check td.ic {
   font-size: 20px;
 }
 
-#check td.res {
+#check .lbl,
+#check .res {
+  display: block;
+}
+
+#check .res {
   font-size: 15px;
 }
 
-#check td.act {
-  text-align: right;
-  width: 92px;
+#check .res:empty {
+  display: none;
+}
+
+#check td.act button {
+  width: 100%;
+  padding-inline: 4px;
 }
 
 #check .ok {
@@ -953,11 +994,16 @@ kbd {
   background: var(--sun);
 }
 
+/* Check everything and Cuddle side by side, Place down the whole width under them. */
 #check .buttons {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 12px;
+}
+
+#check #ck-down {
+  grid-column: 1 / -1;
 }
 
 #check .buttons kbd {
@@ -1671,6 +1717,18 @@ body.touch.playing #stick {
   font-size: 38px;
 }
 
+/* A bigger, invisible place to hit round the action button: a near miss shouldn't throw your veg away. Out to the
+   screen's corner, and up and left to just short of jump and SHOO (rounded, clear of the emotes button). */
+#pad .act::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  right: calc(-17px - env(safe-area-inset-right));
+  bottom: calc(-17px - env(safe-area-inset-bottom));
+  border-top-left-radius: 50%;
+}
+
 #pad .act.ready {
   background: var(--sun);
   animation: ready 1s ease-in-out infinite alternate;
@@ -1860,9 +1918,29 @@ body.touch #check {
   touch-action: pan-y;
 }
 
+/* Taller buttons, easier to hit with a thumb. */
 body.touch #check button {
+  min-height: 44px;
   padding: 6px 12px;
   font-size: 16px;
+}
+
+body.touch #check button.small {
+  min-height: 38px;
+  font-size: 14px;
+}
+
+body.touch #check col.act {
+  width: 108px;
+}
+
+body.touch #check td.act button {
+  padding-inline: 4px;
+}
+
+/* Rows keep their height with or without a button, so nothing jumps when a result comes in. */
+body.touch #check td.act {
+  height: 48px;
 }
 
 /* A phone's short screen: two columns, who and the buttons on the left, the health check on the right, so it all
@@ -1919,12 +1997,16 @@ body.touch #check button {
     padding: 2px 3px;
   }
 
-  body.touch #check td.res {
+  body.touch #check .res {
     font-size: 13px;
   }
 
-  body.touch #check td.act {
-    width: auto;
+  body.touch #check col.act {
+    width: 92px;
+  }
+
+  body.touch #check col.ic {
+    width: 24px;
   }
 
   body.touch #check .buttons {
@@ -1933,8 +2015,23 @@ body.touch #check button {
   }
 
   body.touch #check button {
+    min-height: 40px;
     padding: 5px 9px;
     font-size: 14px;
+  }
+
+  body.touch #check button.small {
+    min-height: 34px;
+    padding: 3px 7px;
+    font-size: 13px;
+  }
+
+  body.touch #check td.act button {
+    padding-inline: 3px;
+  }
+
+  body.touch #check td.act {
+    height: 44px;
   }
 }
 
@@ -2161,10 +2258,7 @@ body.touch #results {
 
 /* The check card's Hide button (touch screens) and the tab that brings it back. */
 #check .fold {
-  float: right;
-  margin: -2px -4px 0 8px;
-  font-size: 14px;
-  padding: 4px 10px;
+  margin-right: -4px;
 }
 
 #check-tab {

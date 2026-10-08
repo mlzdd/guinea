@@ -625,11 +625,16 @@ export class Hud {
   private buildCheck(look: PigLook, act: CheckActions) {
     const sex = look.sex === 'sow' ? '♀ sow' : '♂ boar'
     // In three parts (who, the health check, the buttons): one under another, or on a phone's short screen side by
-    // side (the health check down the right).
+    // side (the health check down the right). Each check's button sits in a fixed-width column, so Check and the fix
+    // land in the same place.
     this.check.innerHTML = `
       <div class="ck-who">
-        <button class="fold taps" type="button" aria-label="Hide the card">▾ Hide</button>
-        <h3>${esc(look.name)}</h3>
+        <div class="ck-head">
+          <h3>${esc(look.name)}</h3>
+          <button id="ck-adopt" class="small">⭐ Adopt</button>
+          <button id="ck-rename" class="small">✏️ Rename</button>
+          <button class="fold small taps" type="button" aria-label="Hide the card">▾ Hide</button>
+        </div>
         <p class="who">${BREED_NAMES[look.breed]} · ${sex} · ${look.age ? `${look.age} yr${look.age > 1 ? 's' : ''} old` : 'a baby!'}</p>
         <p class="family" id="ck-family"></p>
         <div class="bar"><label>Tummy</label><i><b id="ck-hunger"></b></i></div>
@@ -637,8 +642,9 @@ export class Hud {
       </div>
       <div class="ck-health">
         <h4>Health check</h4>
-        <table>${CHECKS.map(
-          (c) => `<tr data-check="${c.id}"><td>${c.icon}</td><td>${c.label}</td><td class="res"></td><td class="act"></td></tr>`,
+        <table><colgroup><col class="ic"><col><col class="act"></colgroup>${CHECKS.map(
+          (c) =>
+            `<tr data-check="${c.id}"><td class="ic">${c.icon}</td><td><span class="lbl">${c.label}</span><span class="res"></span></td><td class="act"></td></tr>`,
         ).join('')}</table>
       </div>
       <div class="ck-buttons">
@@ -646,10 +652,6 @@ export class Hud {
           <button id="ck-all">🩺 Check everything</button>
           <button id="ck-cuddle">🤗 Cuddle</button>
           <button id="ck-down">⬇️ Place down <kbd>E</kbd></button>
-        </div>
-        <div class="buttons">
-          <button id="ck-adopt">⭐ Adopt</button>
-          <button id="ck-rename">✏️ Rename</button>
         </div>
       </div>`
     const start = (id: Check, delay = 0) => {

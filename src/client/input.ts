@@ -1,7 +1,9 @@
 import { TOUCH } from './device.ts'
 
-/** How far the stick's knob goes from where your thumb landed (px). */
+/** How far the stick's knob goes from the middle (px). */
 const STICK_R = 56
+/** A thumb down within this of the stick's middle (px) takes hold of it (the ring is 60): a little to spare, no more. */
+const STICK_GRAB = 95
 /** Pushed this far (0..1) or more, you run. */
 const STICK_RUN = 0.85
 /** A touch that stays put this long (ms) is a hold (who's that piggy?), not a tap. */
@@ -14,8 +16,8 @@ const TAP_SLOP = 14
  * health-check card like any web page. A click does what E does (or throws, if there's nothing to do), the wheel
  * zooms. The camera never turns.
  *
- * On a touch screen: a thumb down on the left of the screen is a stick (it appears where you touch; push it all the
- * way to run), a tap anywhere else throws there, holding on a piggy says who it is, and two fingers pinch to zoom.
+ * On a touch screen: the stick stays put in the bottom left corner (a thumb on it, or just round it, pushes it; all
+ * the way to run), a tap anywhere else throws there, holding on a piggy says who it is, and two fingers pinch to zoom.
  * The on-screen buttons (touch.ts) `press` keys.
  */
 export class Input {
@@ -131,15 +133,14 @@ export class Input {
   private touchDown(e: PointerEvent) {
     e.preventDefault()
     this.canvas.setPointerCapture(e.pointerId)
-    // The left part of the screen (below the top bar) is for walking.
-    if (this.stickId === null && e.clientX < innerWidth * 0.42 && e.clientY > innerHeight * 0.25) {
+    // The stick stays in the bottom left corner: a thumb on it, a little round it or in the corner past it walks.
+    const home = this.stickHome()
+    const nearStick =
+      Math.hypot(e.clientX - home.x, e.clientY - home.y) < STICK_GRAB || (e.clientX < home.x && e.clientY > home.y)
+    if (this.stickId === null && nearStick) {
       this.stickId = e.pointerId
-      // The stick lives in the bottom left corner: a thumb on it pushes it from there, a thumb anywhere else in the
-      // walking part of the screen brings it over (and it goes back home when you let go).
-      const home = this.stickHome()
-      const onIt = Math.hypot(e.clientX - home.x, e.clientY - home.y) < STICK_R * 1.6
-      this.stickAt.x = onIt ? home.x : e.clientX
-      this.stickAt.y = onIt ? home.y : e.clientY
+      this.stickAt.x = home.x
+      this.stickAt.y = home.y
       this.stickEl?.classList.add('on')
       this.stickMove(e.clientX, e.clientY)
       return
@@ -200,20 +201,14 @@ export class Input {
     let dx = x - this.stickAt.x
     let dy = y - this.stickAt.y
     const d = Math.hypot(dx, dy)
-    // Past the edge, the stick comes along with your thumb.
+    // Past the edge, the knob stays at the edge (the stick doesn't move).
     if (d > STICK_R) {
-      this.stickAt.x = x - (dx / d) * STICK_R
-      this.stickAt.y = y - (dy / d) * STICK_R
       dx = (dx / d) * STICK_R
       dy = (dy / d) * STICK_R
     }
     this.stick.x = dx / STICK_R
     this.stick.y = -dy / STICK_R
-    if (this.stickEl && this.knobEl) {
-      const home = this.stickHome()
-      this.stickEl.style.transform = `translate(${this.stickAt.x - home.x}px, ${this.stickAt.y - home.y}px)`
-      this.knobEl.style.transform = `translate(${dx}px, ${dy}px)`
-    }
+    if (this.knobEl) this.knobEl.style.transform = `translate(${dx}px, ${dy}px)`
   }
 
   /** The middle of the stick at rest (the CSS puts it in the bottom left, clear of any notch). */
@@ -229,7 +224,6 @@ export class Input {
     this.stick.x = this.stick.y = 0
     if (this.stickEl && this.knobEl) {
       this.stickEl.classList.remove('on')
-      this.stickEl.style.transform = ''
       this.knobEl.style.transform = ''
     }
   }
