@@ -1865,6 +1865,79 @@ body.touch #check button {
   font-size: 16px;
 }
 
+/* A phone's short screen: two columns, who and the buttons on the left, the health check on the right, so it all
+   fits without scrolling. */
+@media (max-height: 500px) {
+  body.touch #check {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr;
+    grid-template-areas: 'who health' 'buttons health';
+    align-items: start;
+    column-gap: 16px;
+    width: min(720px, calc(100vw - 2 * 160px));
+    min-width: 480px;
+    max-height: calc(100dvh - 16px);
+    padding: 10px 14px;
+  }
+
+  body.touch #check .ck-who {
+    grid-area: who;
+  }
+
+  body.touch #check .ck-health {
+    grid-area: health;
+  }
+
+  body.touch #check .ck-buttons {
+    grid-area: buttons;
+  }
+
+  body.touch #check h3 {
+    font-size: 24px;
+  }
+
+  body.touch #check .who {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+
+  body.touch #check .bar {
+    margin: 2px 0;
+    font-size: 14px;
+  }
+
+  body.touch #check h4 {
+    margin: 0 0 2px;
+    font-size: 16px;
+  }
+
+  body.touch #check table {
+    font-size: 14px;
+  }
+
+  body.touch #check td {
+    padding: 2px 3px;
+  }
+
+  body.touch #check td.res {
+    font-size: 13px;
+  }
+
+  body.touch #check td.act {
+    width: auto;
+  }
+
+  body.touch #check .buttons {
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  body.touch #check button {
+    padding: 5px 9px;
+    font-size: 14px;
+  }
+}
+
 body.touch #shop,
 body.touch #report,
 body.touch #diary,
@@ -2023,4 +2096,90 @@ body.touch #results {
   #judging h3 {
     font-size: 18px;
   }
+}
+
+/* Short screens (phones sideways): the end-of-day report packed down to fit without scrolling: the title, stars and
+   verdict on one line, the wallet and the buttons on another. */
+@media (max-height: 500px) {
+  #report {
+    width: min(560px, calc(100vw - 32px));
+    padding: 8px 16px 10px;
+  }
+
+  #report .head,
+  #report .foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    column-gap: 14px;
+  }
+
+  #report h3 {
+    font-size: 24px;
+  }
+
+  #report .stars {
+    margin: 0;
+    font-size: 24px;
+    letter-spacing: 2px;
+  }
+
+  #report .verdict {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  #report table {
+    margin-top: 4px;
+  }
+
+  #report td {
+    padding: 1px 4px;
+    font-size: 14px;
+  }
+
+  #report tr.sum td {
+    padding-top: 4px;
+    font-size: 17px;
+  }
+
+  #report .wallet {
+    margin: 6px 0 0;
+    font-size: 15px;
+  }
+
+  #report .buttons {
+    margin-top: 6px;
+  }
+
+  #report button {
+    font-size: 15px;
+    padding: 3px 10px;
+  }
+}
+
+/* The check card's Hide button (touch screens) and the tab that brings it back. */
+#check .fold {
+  float: right;
+  margin: -2px -4px 0 8px;
+  font-size: 14px;
+  padding: 4px 10px;
+}
+
+#check-tab {
+  position: absolute;
+  top: calc(84px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--cream);
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 3px 0 var(--ink);
+  pointer-events: auto;
+  touch-action: manipulation;
 }

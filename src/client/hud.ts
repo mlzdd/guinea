@@ -101,6 +101,9 @@ const CALLOUT_MS = 2800
 export class Hud {
   private readonly check = $('check')
   private checkPig: number | null = null
+  /** The check card tucked away (touch screens: it covers the farm) to walk about with your piggy: just a tab to bring it back. */
+  private checkFolded = false
+  private readonly checkTab = document.createElement('button')
   private renaming = false
   private jobsKey = ''
   private todayKey = ''
@@ -122,6 +125,14 @@ export class Hud {
   }
 
   constructor() {
+    this.checkTab.id = 'check-tab'
+    this.checkTab.type = 'button'
+    this.checkTab.hidden = true
+    this.checkTab.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      this.foldCheck(false)
+    })
+    $('hud').append(this.checkTab)
     // The ✕ on the shop and the diary.
     $('shop').addEventListener('click', (e) => (e.target as HTMLElement).closest('.x') && this.toggleShop(false))
     $('diary').addEventListener('click', (e) => (e.target as HTMLElement).closest('.x') && this.toggleDiary(false))
@@ -412,16 +423,20 @@ export class Hud {
     const stars = '★'.repeat(r.stars) + '☆'.repeat(5 - r.stars)
     const verdict = ['Oh dear…', 'Not bad', 'Good day!', 'Great day!', 'Piggy paradise!'][r.stars - 1]
     el.innerHTML = `
-      <h3>Day ${r.day} done!</h3>
-      <p class="stars">${stars}</p>
-      <p class="verdict">${verdict}</p>
+      <div class="head">
+        <h3>Day ${r.day} done!</h3>
+        <p class="stars">${stars}</p>
+        <p class="verdict">${verdict}</p>
+      </div>
       <table>${r.lines
         .map((l) => `<tr><td>${esc(l.label)}</td><td class="${l.coins < 0 ? 'bad' : 'ok'}">${l.coins > 0 ? '+' : ''}${l.coins}</td></tr>`)
         .join('')}
         <tr class="sum"><td>Earned today</td><td>🪙 ${r.total}</td></tr>
       </table>
-      <p class="wallet">Farm wallet: 🪙 <b>${r.coins}</b></p>
-      <div class="buttons"><button id="rp-shop">🛒 Go shopping <kbd>B</kbd></button><button id="rp-ok">Lovely!</button></div>`
+      <div class="foot">
+        <p class="wallet">Farm wallet: 🪙 <b>${r.coins}</b></p>
+        <div class="buttons"><button id="rp-shop">🛒 Go shopping <kbd>B</kbd></button><button id="rp-ok">Lovely!</button></div>
+      </div>`
     el.hidden = false
     const close = () => (el.hidden = true)
     el.querySelector('#rp-ok')!.addEventListener('click', close)
@@ -551,7 +566,9 @@ export class Hud {
   showCheck(look: PigLook | null, snap: PigSnap | null, act: CheckActions, extra: CheckExtra) {
     if (!look || !snap) {
       this.check.hidden = true
+      this.checkTab.hidden = true
       this.checkPig = null
+      this.checkFolded = false
       this.renaming = false
       return
     }
@@ -559,10 +576,27 @@ export class Hud {
       this.checkPig = look.id
       this.checked.clear()
       this.renaming = false
+      this.checkFolded = false
       this.buildCheck(look, act)
     }
-    this.check.hidden = false
+    this.check.hidden = this.checkFolded
+    this.checkTab.hidden = !this.checkFolded
+    const tab = `🐹 ${esc(look.name)} · 🩺 Show card`
+    if (this.checkTab.dataset.html !== tab) this.checkTab.innerHTML = this.checkTab.dataset.html = tab
     this.updateCheck(look, snap, extra)
+  }
+
+  /** Whether the check card is up (you're holding a piggy and it isn't tucked away). */
+  get checkOpen() {
+    return this.checkPig !== null && !this.checkFolded
+  }
+
+  /** Tucks the check card away (or brings it back). */
+  foldCheck(fold: boolean) {
+    if (this.checkPig === null || this.renaming) return
+    this.checkFolded = fold
+    this.check.hidden = fold
+    this.checkTab.hidden = !fold
   }
 
   /** Swaps the pig's name for a text box. Enter saves, Escape doesn't. */
@@ -590,28 +624,38 @@ export class Hud {
 
   private buildCheck(look: PigLook, act: CheckActions) {
     const sex = look.sex === 'sow' ? '♀ sow' : '♂ boar'
+    // In three parts (who, the health check, the buttons): one under another, or on a phone's short screen side by
+    // side (the health check down the right).
     this.check.innerHTML = `
-      <h3>${esc(look.name)}</h3>
-      <p class="who">${BREED_NAMES[look.breed]} · ${sex} · ${look.age ? `${look.age} yr${look.age > 1 ? 's' : ''} old` : 'a baby!'}</p>
-      <p class="family" id="ck-family"></p>
-      <div class="bar"><label>Tummy</label><i><b id="ck-hunger"></b></i></div>
-      <div class="bar"><label>Happy</label><i><b id="ck-happy"></b></i></div>
-      <h4>Health check</h4>
-      <table>${CHECKS.map(
-        (c) => `<tr data-check="${c.id}"><td>${c.icon}</td><td>${c.label}</td><td class="res"></td><td class="act"></td></tr>`,
-      ).join('')}</table>
-      <div class="buttons">
-        <button id="ck-all">🩺 Check everything</button>
-        <button id="ck-cuddle">🤗 Cuddle</button>
-        <button id="ck-down">⬇️ Put down <kbd>E</kbd></button>
+      <div class="ck-who">
+        <button class="fold taps" type="button" aria-label="Hide the card">▾ Hide</button>
+        <h3>${esc(look.name)}</h3>
+        <p class="who">${BREED_NAMES[look.breed]} · ${sex} · ${look.age ? `${look.age} yr${look.age > 1 ? 's' : ''} old` : 'a baby!'}</p>
+        <p class="family" id="ck-family"></p>
+        <div class="bar"><label>Tummy</label><i><b id="ck-hunger"></b></i></div>
+        <div class="bar"><label>Happy</label><i><b id="ck-happy"></b></i></div>
       </div>
-      <div class="buttons">
-        <button id="ck-adopt">⭐ Adopt</button>
-        <button id="ck-rename">✏️ Rename</button>
+      <div class="ck-health">
+        <h4>Health check</h4>
+        <table>${CHECKS.map(
+          (c) => `<tr data-check="${c.id}"><td>${c.icon}</td><td>${c.label}</td><td class="res"></td><td class="act"></td></tr>`,
+        ).join('')}</table>
+      </div>
+      <div class="ck-buttons">
+        <div class="buttons">
+          <button id="ck-all">🩺 Check everything</button>
+          <button id="ck-cuddle">🤗 Cuddle</button>
+          <button id="ck-down">⬇️ Place down <kbd>E</kbd></button>
+        </div>
+        <div class="buttons">
+          <button id="ck-adopt">⭐ Adopt</button>
+          <button id="ck-rename">✏️ Rename</button>
+        </div>
       </div>`
     const start = (id: Check, delay = 0) => {
       if (!this.checked.has(id)) this.checked.set(id, performance.now() + delay + CHECK_MS)
     }
+    this.check.querySelector('.fold')!.addEventListener('click', () => this.foldCheck(true))
     this.check.querySelector('#ck-all')!.addEventListener('click', () => CHECKS.forEach((c, i) => start(c.id, i * 350)))
     this.check.querySelector('#ck-cuddle')!.addEventListener('click', () => act.cuddle())
     this.check.querySelector('#ck-down')!.addEventListener('click', () => act.putDown())

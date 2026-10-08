@@ -209,8 +209,11 @@ export class Game {
     // A tap on a touch screen throws there (the action has its own button, and the prompt can be tapped).
     this.input.onTap = () => {
       if (this.snap?.paused || !this.me.model) return
+      // Holding a piggy (the check card's up): a tap off the card places it down, like a click does.
+      // (Not with the card tucked away: then you're walking about with it.)
+      if (this.holding() !== null) return this.hud.checkOpen ? this.send({ t: 'putdown' }) : undefined
       // Hands full or nothing to throw: a stray tap does nothing (no telling off).
-      if (this.holding() !== null || this.hasSack() || this.mySnap()?.platter) return
+      if (this.hasSack() || this.mySnap()?.platter) return
       if (!this.basket().some((n) => n > 0) && this.hayArmfuls() <= 0) return
       this.updateAim(this.holding())
       this.throwVeg()
@@ -616,7 +619,7 @@ export class Game {
   private throwVeg(at: { x: number; z: number } = this.aim) {
     if (!this.snap || this.clock - this.lastThrow < THROW_COOLDOWN) return
     if (this.holding() !== null) {
-      this.hud.toast(`Put the piggy down first (${ACT_KEY})`)
+      this.hud.toast(`Place the piggy down first (${ACT_KEY})`)
       return
     }
     if (this.hasSack()) {
@@ -692,6 +695,8 @@ export class Game {
     const dz = right.z * mv.x + fwd.z * mv.y
     const len = Math.hypot(dx, dz)
     const run = this.input.running() && holding === null
+    // On a phone the check card covers the farm: walking off with your piggy tucks it away (a tab brings it back).
+    if (TOUCH && len > 0 && holding !== null) this.hud.foldCheck(true)
     const speed = len > 0 ? ((run ? RUN_SPEED : WALK_SPEED) * farmerSpeed(this.snap.upgrades)) / len : 0
 
     // Momentum, jumping and falling: anything lower than your feet doesn't get in the way, and you land on whatever's under you.
@@ -1061,7 +1066,7 @@ export class Game {
     } else if (mine?.aboard || mine?.atShow) {
       best = this.showAction(holding)
     } else if (holding !== null) {
-      best = { label: `Put <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
+      best = { label: `Place <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
       if (car < CAR_REACH) best = { label: `<b>Take ${this.looks[holding].name} to the pig show 🚗</b>`, msg: { t: 'board' }, d: -1 }
     } else {
       if (car < CAR_REACH) offer({ label: 'Come and watch the pig show 🚗 (or carry a piggy here to enter it)', msg: { t: 'board' }, d: -1 })
