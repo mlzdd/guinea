@@ -22,7 +22,7 @@ import {
   PIG_HOUSES,
   PIG_SOLIDS,
   POND,
-  SALAD_SPOT,
+  SALAD_SPOTS,
   SALAD_TABLE,
   TREES,
   canBuy,
@@ -51,6 +51,13 @@ import {
   hutStep,
   pigLineBlocked,
   pigPath,
+  center,
+  HAY_FIELD,
+  GARDENER_HOME,
+  VET_FACE,
+  VET_OUT,
+  VET_SLOTS,
+  VET_TABLE,
   settleFarmer,
   settlePig,
   settleRaider,
@@ -157,6 +164,9 @@ import {
   LUSH_GRAZE,
   FLOWER_HAPPY,
   FOOD_SLEEPERS,
+  SNUGGLE,
+  SNUGGLE_RANGE,
+  BED_TRIES,
   POND_HAPPY,
   PREGNANCY_DAYS,
   PREGNANCY_PER_DAY,
@@ -197,8 +207,20 @@ import {
   PLATTER_LURE,
   PLATTER_PLACE,
   SALAD_KINDS,
-  SALAD_MAX,
   SALAD_MIN,
+  saladMax,
+  GARDENER_HOPPER,
+  GARDENER_OFF,
+  clockHours,
+  GARDENER_ON,
+  GARDENER_NAME,
+  GARDENER_ROOM,
+  GARDENER_SPEED,
+  GARDENER_WORK_MS,
+  VET_MS,
+  VET_QUEUE,
+  PLATTER_MAX,
+  platters,
   SEEK_RADIUS,
   SNACK_TRIP,
   SNACKY,
@@ -298,6 +320,8 @@ export interface Pig extends PigLook {
   careTotal: number
   /** For noticing a pig that is walking into a wall. */
   stuckAt: number
+  /** Goes at getting to bed tonight (they give up and sleep where they are after BED_TRIES). */
+  bedTries: number
   stuckX: number
   stuckZ: number
   /** The pig it's following in a guinea pig train, if any. */
@@ -384,8 +408,32 @@ interface Farmer {
   /** In the show car waiting to go, or at the pig show. */
   aboard: boolean
   atShow: boolean
-  /** Carrying the salad platter. */
-  platter: boolean
+  /** Carrying a salad platter: the veg on it (VEGGIES order). */
+  platter: number[] | null
+}
+
+/** The gardener: a helper going about the farm like a farmer, a job at a time (`key` names it, to skip it a while if it didn't work). */
+interface GardenerTask {
+  key: string
+  to: P
+  /** Close enough to do it. */
+  near: number
+  /** What it does when it gets there (null: just going there). */
+  msg: ClientMsg | null
+}
+interface Gardener extends Farmer {
+  task: GardenerTask | null
+  path: P[]
+  /** Busy at a job (`busy`) or having a rest till then. */
+  workUntil: number
+  busy: boolean
+  /** Basket full: putting everything away before picking any more. */
+  unloading: boolean
+  /** Gone home for the night (off shift), and the way they went: in and out over the fence there. */
+  away: boolean
+  gate: { inside: P; outside: P } | null
+  /** Jobs that didn't work out, left alone till then. */
+  skip: Map<string, number>
 }
 
 /** A farmer at the pig show: the piggy they brought (null: just watching), their spot, its scores, back at the spot. */
@@ -476,13 +524,18 @@ const CALM: PigState[] = ['idle', 'wander', 'graze', 'beg', 'popcorn', 'zoom', '
 const HERDABLE: PigState[] = ['idle', 'wander', 'graze', 'popcorn', 'zoom', 'mope', 'scoot', 'scratch', 'sneeze', 'home']
 /** States that don't get shoved about by other pigs. */
 const SETTLED: PigState[] = ['sleep', 'hide', 'eat']
-const AWAY: PigState[] = ['held', 'carried', 'lost', 'show']
+/** Steps round the bed spots a pig at a time: 7 or more, sharing no factor with how many there are, so each gets its own. */
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a)
+const BED_STEP = Array.from({ length: BED_SPOTS.length }, (_, i) => 7 + i).find((k) => gcd(k, BED_SPOTS.length) === 1) ?? 1
+/** At one of the bed spots. */
+const atBed = (p: P) => BED_SPOTS.some((b) => dist(p, b) < 1)
+const AWAY: PigState[] = ['held', 'carried', 'lost', 'show', 'vet']
 /** Food ids of the hoppers come after the bowls. */
 export const HOPPER_ID = BOWLS.length
-/** The served salad platter is a fixed food too, after the hoppers. */
+/** The served salad platters are fixed foods too, after the hoppers: one per SALAD_SPOTS. */
 export const SALAD_ID = HOPPER_ID + HOPPERS.length
 /** Then the hay racks. */
-export const RACK_ID = SALAD_ID + 1
+export const RACK_ID = SALAD_ID + SALAD_SPOTS.length
 const PIG_GAP = 0.6
 /** A pig looks for a new way round things at most this often. */
 const PATH_EVERY_MS = 800
@@ -492,6 +545,8 @@ const BOWL_RING = 0.6
 const r2 = (v: number) => Math.round(v * 100) / 100
 const isVeg = (k: Food['kind']): k is Veg => VEGGIES.includes(k as Veg)
 const bits = (n: number) => ISSUES.reduce((c, i) => c + (n & ISSUE_BIT[i] ? 1 : 0), 0)
+/** What the vet did, for the alert. */
+const VET_DONE: Record<Issue, string> = { nails: 'trimmed nails ✂️', mites: 'mites treated 🧴', sniffles: 'vitamin C for the sniffles 🍊', teeth: 'teeth filed 🦷' }
 const DONE: Record<Issue, string> = {
   nails: 'trimmed {pig}’s nails ✂️',
   mites: 'treated {pig} for mites 🧴',
@@ -514,6 +569,11 @@ export class Farm {
   farmers = new Map<number, Farmer>()
   private nextId = 100
   private nextFarmer = 1
+  /** Piggies left with the vet (the first on the table), who brought each, and when the vet started on the first. */
+  vetQueue: { pig: number; by: string }[] = []
+  private vetFrom = 0
+  /** The gardener, once hired. */
+  gardener: Gardener | null = null
   nextFoxAt: number
   nextHawkAt: number
   private appleAt: number[]
@@ -578,7 +638,7 @@ export class Farm {
       const id = HOPPER_ID + i
       this.foods.set(id, { id, kind: 'pellets', x: h.x, z: h.z, bites: i === 0 ? 30 : 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
     })
-    this.foods.set(SALAD_ID, { id: SALAD_ID, kind: 'salad', ...SALAD_SPOT, bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null })
+    SALAD_SPOTS.forEach((s, i) => this.foods.set(SALAD_ID + i, { id: SALAD_ID + i, kind: 'salad', ...s, bites: 0, landAt: 0, landed: true, bowl: true, tree: null, by: null }))
     HAY_RACKS.forEach((r, i) => {
       // Pigs eat the hay that falls on the floor in front of the rack.
       const id = RACK_ID + i
@@ -632,6 +692,7 @@ export class Farm {
       careTotal: 0,
       hayAt: -1e9,
       stuckAt: 0,
+      bedTries: 0,
       stuckX: spot.x,
       stuckZ: spot.z,
       follow: null,
@@ -705,7 +766,7 @@ export class Farm {
       hay: kept?.hay ?? 0,
       aboard: false,
       atShow: false,
-      platter: false,
+      platter: null,
       lastShoo: -1e9,
       lastEmote: -1e9,
       lastX: spot.x,
@@ -723,7 +784,7 @@ export class Farm {
     this.leaveShow(f)
     this.putDown(f)
     if (f.sack) this.sacks++ // the sack goes back in the bin
-    f.platter = false // and the platter back on the station
+    this.platterBack(f) // and the platter back on the station
     this.baskets.set(f.name, { basket: [...f.basket], hay: f.hay })
     this.farmers.delete(id)
     this.alert('farmer', `${f.name} went home`)
@@ -742,6 +803,11 @@ export class Farm {
     }
     // Paused: everything stands still, farmers too (the diary can still be read).
     if (this.paused && msg.t !== 'diary') return
+    this.act(f, msg)
+  }
+
+  /** A farmer (or the gardener) doing something: every request is checked here (near enough, room, state). */
+  private act(f: Farmer, msg: ClientMsg) {
     switch (msg.t) {
       case 'state':
         f.x = msg.x
@@ -953,8 +1019,9 @@ export class Farm {
         // Everything in your basket goes in, up to a full platter.
         if (this.saladServed || dist(f, SALAD_TABLE) > REACH) return
         let added = 0
+        const carried = this.platterCarriers().reduce((a, c) => a + c.platter!.reduce((x, y) => x + y, 0), 0)
         for (let i = 0; i < VEGGIES.length; i++) {
-          const n = Math.min(f.basket[i], SALAD_MAX - this.saladSize())
+          const n = Math.max(0, Math.min(f.basket[i], saladMax(this.pigs.length) - carried - this.saladSize()))
           f.basket[i] -= n
           this.salad[i] += n
           added += n
@@ -963,22 +1030,22 @@ export class Farm {
         return
       }
       case 'serve':
-        // Carrying the platter: down it goes in the middle of the barn (or back on the station).
+        // Carrying a platter: down it goes on a free spot on the barn floor (or back on the station).
         if (f.platter) {
-          if (dist(f, SALAD_SPOT) <= PLATTER_PLACE) {
-            f.platter = false
-            return this.serveSalad(f)
-          }
-          if (dist(f, SALAD_TABLE) <= REACH) f.platter = false
+          const spot = this.freeSpots().find((i) => dist(f, SALAD_SPOTS[i]) <= PLATTER_PLACE)
+          if (spot !== undefined) return this.serveSalad(f, spot)
+          if (dist(f, SALAD_TABLE) <= REACH) this.platterBack(f)
           return
         }
-        // At the station when it's time: pick it up (one platter, empty hands).
-        if (dist(f, SALAD_TABLE) > REACH || !this.canServe() || this.handsFull(f) || this.platterCarrier()) return
-        f.platter = true
+        // At the station when it's time: pick one up (empty hands), with up to PLATTER_MAX veg on it.
+        if (dist(f, SALAD_TABLE) > REACH || !this.canServe() || this.handsFull(f)) return
+        f.platter = this.dishUp()
         return
       case 'diary':
         this.out.push({ to: f.id, msg: { t: 'diary', rows: this.diaryRows() } })
         return
+      case 'vet':
+        return this.toVet(f)
     }
   }
 
@@ -991,39 +1058,84 @@ export class Farm {
   saladReady() {
     return this.saladSize() >= SALAD_MIN && this.saladKinds() >= SALAD_KINDS
   }
-  /** Ready, not served yet tonight, and late enough in the day. */
+  /**
+   * A platter can be picked up: late enough in the day, the salad's ready (or tonight's is already going out and
+   * there's more of it), and there's a spot free for it that nobody's carrying a platter to.
+   */
   canServe() {
-    return !this.saladServed && this.saladReady() && (this.night || this.dayTime >= SALAD_FROM)
+    if (!(this.night || this.dayTime >= SALAD_FROM) || this.saladSize() === 0) return false
+    if (!this.saladServed && !this.saladReady()) return false
+    return this.freeSpots().length > this.platterCarriers().length
+  }
+
+  /** Spots on the barn floor with no platter on them (as many as the herd needs platters). */
+  freeSpots() {
+    const n = Math.min(SALAD_SPOTS.length, platters(this.pigs.length))
+    return SALAD_SPOTS.map((_, i) => i).filter((i) => i < n && this.foods.get(SALAD_ID + i)!.bites <= 0)
+  }
+
+  /** Takes a platter's worth off the station: a veg of each kind in turn, so every platter gets the variety. */
+  private dishUp() {
+    const plate = VEGGIES.map(() => 0)
+    for (let n = 0; n < PLATTER_MAX && this.saladSize() > 0; )
+      for (let i = 0; i < VEGGIES.length && n < PLATTER_MAX; i++)
+        if (this.salad[i] > 0) {
+          this.salad[i]--
+          plate[i]++
+          n++
+        }
+    return plate
+  }
+
+  /** A carried platter goes back on the station, veg and all. */
+  private platterBack(f: Farmer) {
+    if (!f.platter) return
+    f.platter.forEach((n, i) => (this.salad[i] += n))
+    f.platter = null
   }
 
   /** Holding a piggy, a sack of pellets or the salad platter: no hands for anything else. */
   private handsFull(f: Farmer) {
-    return f.holding !== null || f.sack || f.platter
+    return f.holding !== null || f.sack || !!f.platter
   }
 
-  /** Whoever's carrying the salad platter. */
-  private platterCarrier(): Farmer | undefined {
-    for (const f of this.farmers.values()) if (f.platter) return f
+  /** Whoever's carrying a salad platter. */
+  private platterCarriers(): Farmer[] {
+    return [...this.farmers.values()].filter((f) => f.platter)
   }
 
-  /** Supper! The platter goes down in the barn and every pig that's not stuffed comes in for it. */
-  private serveSalad(f: Farmer) {
-    const kinds = this.saladKinds()
-    const platter = this.foods.get(SALAD_ID)!
-    platter.bites = this.saladSize() * SALAD_BITES
+  /** The nearest farmer carrying a salad platter. */
+  private platterCarrier(p: P): Farmer | undefined {
+    let best: Farmer | undefined
+    for (const f of this.platterCarriers()) if (!best || dist(p, f) < dist(p, best)) best = f
+    return best
+  }
+
+  /** Supper! A platter goes down in the barn and every pig that's not stuffed comes in for it. */
+  private serveSalad(f: Farmer, spot: number) {
+    const veg = f.platter!
+    f.platter = null
+    const kinds = veg.filter((n) => n > 0).length
+    const platter = this.foods.get(SALAD_ID + spot)!
+    platter.bites = veg.reduce((a, b) => a + b, 0) * SALAD_BITES
     platter.by = f.name
-    this.salad = VEGGIES.map(() => 0)
+    this.credit(f.name, 'salad')
+    this.excite(platter, 200)
+    if (this.saladServed) {
+      this.today.salad = Math.max(this.today.salad, kinds)
+      this.alert('fun', `🥗 ${f.name} brought in another salad platter!`)
+      return
+    }
     this.saladServed = true
     this.today.salad = kinds
     this.alert('fun', `🥗 ${f.name} served the salad platter (${kinds} kinds of veg)! Everyone in for supper!`, true)
-    this.credit(f.name, 'salad')
-    this.excite(platter, 200)
     // The ones too full to eat head in anyway.
     for (const p of this.pigs) if (!isInside(p) && CALM.includes(p.state)) this.goHome(p)
   }
 
   /** A farmer did something: count it in the diary and towards today's jobs. */
   credit(name: string, stat: Stat, n = 1) {
+    if (name === GARDENER_NAME) return
     let row = this.diary.get(name)
     if (!row) this.diary.set(name, (row = zeroStats()))
     row[stat] += n
@@ -1132,8 +1244,11 @@ export class Farm {
     const p = this.pigs[f.holding]
     f.holding = null
     p.heldBy = null
-    p.x = f.x - Math.sin(f.yaw) * 0.8
-    p.z = f.z - Math.cos(f.yaw) * 0.8
+    // Just in front of you, but never through a wall (facing one, it goes down at your feet).
+    const at = [0.8, 0.5, 0.25, 0]
+      .map((d) => ({ x: f.x - Math.sin(f.yaw) * d, z: f.z - Math.cos(f.yaw) * d }))
+      .find((q) => !pigLineBlocked(f, q, 0.05))
+    Object.assign(p, at ?? { x: f.x, z: f.z })
     settlePig(p, PIG_RADIUS)
     this.setState(p, 'idle', 800)
   }
@@ -1146,6 +1261,307 @@ export class Farm {
       const reach = shooRadius(this.upgrades) + (pred.kind === 'hawk' ? HAWK_SHOO_EXTRA : 0)
       if (pred.state !== 'flee' && dist(f, pred) <= reach) this.scare(pred, f.name)
     }
+  }
+
+  // ---------------------------------------------------------------- the vet clinic
+
+  /** The piggy you're holding, left with the vet (if the clinic's built and there's room in the queue). */
+  private toVet(f: Farmer) {
+    const p = f.holding === null ? null : this.pigs[f.holding]
+    if (!p || !this.upgrades.includes('clinic') || this.vetQueue.length >= VET_QUEUE || dist(f, VET_TABLE) > REACH + 0.6) return
+    f.holding = null
+    p.heldBy = null
+    this.setState(p, 'vet')
+    if (!this.vetQueue.length) this.vetFrom = this.t
+    this.vetQueue.push({ pig: p.id, by: f.name })
+    this.placeVet()
+    this.alert('care', `💊 ${f.name} left ${p.name} with the vet`)
+  }
+
+  /** The first in the queue up on the table, the others in the crates beside it. */
+  private placeVet() {
+    this.vetQueue.forEach((q, i) => {
+      const p = this.pigs[q.pig]
+      p.x = p.tx = VET_SLOTS[i].x
+      p.z = p.tz = VET_SLOTS[i].z
+      p.yaw = VET_FACE // facing out into the barn
+    })
+  }
+
+  /** The vet sees to one piggy at a time: a full check, everything fixed, then let go in front of the table. */
+  private updateVet() {
+    const q = this.vetQueue[0]
+    if (!q || this.t - this.vetFrom < VET_MS) return
+    this.vetQueue.shift()
+    this.vetFrom = this.t
+    const p = this.pigs[q.pig]
+    const found = ISSUES.filter((i) => p.issues & ISSUE_BIT[i])
+    for (const _ of found) this.today.treats++
+    if (found.length) this.credit(q.by, 'fix', found.length)
+    p.issues = 0
+    p.happy = Math.min(100, p.happy + 10 * found.length)
+    Object.assign(p, VET_OUT)
+    p.tx = p.x
+    p.tz = p.z
+    settlePig(p, PIG_RADIUS)
+    this.setState(p, 'idle', 1000)
+    this.alert('care', found.length ? `💊 The vet saw to ${p.name}: ${found.map((i) => VET_DONE[i]).join(', ')}. All better!` : `💊 The vet checked ${p.name} over: fit as a fiddle!`)
+    this.placeVet()
+  }
+
+  // ---------------------------------------------------------------- the gardener
+
+  private newGardener(): Gardener {
+    return {
+      id: -1,
+      name: GARDENER_NAME,
+      color: 0,
+      ...GARDENER_HOME,
+      y: 0,
+      yaw: 0,
+      basket: VEGGIES.map(() => 0),
+      holding: null,
+      sack: false,
+      hay: 0,
+      aboard: false,
+      atShow: false,
+      platter: null,
+      lastShoo: 0,
+      lastEmote: 0,
+      lastX: GARDENER_HOME.x,
+      lastZ: GARDENER_HOME.z,
+      vx: 0,
+      vz: 0,
+      task: null,
+      path: [],
+      workUntil: 0,
+      busy: false,
+      unloading: false,
+      away: this.gardenerOff(),
+      gate: null,
+      skip: new Map(),
+    }
+  }
+
+  /** The gardener, a job at a time: walk there (slowly), do it, have a breather, pick the next. */
+  private updateGardener(dt: number) {
+    if (!this.upgrades.includes('gardener')) {
+      this.gardener = null
+      return
+    }
+    const g = (this.gardener ??= this.newGardener())
+    const off = this.gardenerOff()
+    if (g.away) {
+      if (off) return
+      // Back for the day: in over the fence the way they went home.
+      g.away = false
+      const way = g.gate ?? this.fenceGate(GARDENER_HOME)
+      Object.assign(g, way.outside)
+      g.yaw = yawTowards(g, way.inside)
+      g.task = { key: 'arrive', to: way.inside, msg: null, near: 0.2 }
+      g.path = [way.inside]
+      g.workUntil = 0
+      this.alert('farmer', '🌱 The gardener’s here for the day')
+    } else if (off && g.task?.key !== 'leave') {
+      // Clocking off: a sack in hand goes back in the bin, then home over the nearest bit of fence.
+      if (g.sack) {
+        g.sack = false
+        this.sacks++
+      }
+      const way = (g.gate = this.fenceGate(g))
+      g.task = { key: 'leave', to: way.outside, msg: null, near: 0.2 }
+      g.path = [...(this.gardenerPath(g, way.inside) ?? []), way.outside]
+      g.workUntil = 0
+      g.busy = false
+      this.alert('farmer', '🌱 The gardener’s off home for the night (back at 7am)')
+    }
+    if (this.t < g.workUntil) return
+    if (!g.task) {
+      g.task = this.gardenerTask(g)
+      // Nothing to do: a rest before looking again.
+      if (!g.task) {
+        g.workUntil = this.t + 2000
+        g.busy = false
+        return
+      }
+      const path = this.gardenerPath(g, g.task.to)
+      if (!path) {
+        g.skip.set(g.task.key, this.t + 30_000)
+        g.task = null
+        return
+      }
+      g.path = path
+    }
+    const task = g.task
+    let step = GARDENER_SPEED * dt
+    while (step > 0 && g.path.length && dist(g, task.to) > task.near) {
+      const next = g.path[0]
+      const d = dist(g, next)
+      if (d > 1e-3) g.yaw = yawTowards(g, next)
+      if (d <= step) {
+        g.x = next.x
+        g.z = next.z
+        g.path.shift()
+        step -= d
+      } else {
+        g.x += ((next.x - g.x) / d) * step
+        g.z += ((next.z - g.z) / d) * step
+        step = 0
+      }
+    }
+    if (g.path.length && dist(g, task.to) > task.near) return
+    if (task.key === 'leave') {
+      g.away = true
+      g.task = null
+      g.path = []
+      return
+    }
+    // There: do the job. If it came to nothing (someone beat them to it), leave it alone a while.
+    g.task = null
+    g.path = []
+    if (!task.msg) return
+    g.yaw = yawTowards(g, task.to)
+    const sig = () => JSON.stringify([g.basket, g.hay, g.sack, this.beds.map((b) => b.stage)])
+    const before = sig()
+    this.act(g, task.msg)
+    if (sig() === before) g.skip.set(task.key, this.t + 30_000)
+    g.workUntil = this.t + GARDENER_WORK_MS
+    g.busy = true
+  }
+
+  /** The gardener works 7am to 7pm. */
+  private gardenerOff() {
+    const h = clockHours(this.dayTime)
+    return h < GARDENER_ON || h >= GARDENER_OFF
+  }
+
+  /** The nearest bit of the farm fence (not the barn's) to `p`: just inside it, and a few steps out the other side. */
+  private fenceGate(p: P) {
+    let best = { inside: p, outside: p }
+    let bestD = Infinity
+    for (const e of FENCE_EDGES) {
+      if (e.barn) continue
+      const dx = e.b.x - e.a.x
+      const dz = e.b.z - e.a.z
+      const t = Math.max(0.15, Math.min(0.85, ((p.x - e.a.x) * dx + (p.z - e.a.z) * dz) / (dx * dx + dz * dz)))
+      const at = { x: e.a.x + dx * t, z: e.a.z + dz * t }
+      const d = dist(p, at)
+      if (d >= bestD) continue
+      bestD = d
+      best = { inside: { x: at.x - e.out.x * 1.2, z: at.z - e.out.z * 1.2 }, outside: { x: at.x + e.out.x * 3, z: at.z + e.out.z * 3 } }
+    }
+    return best
+  }
+
+  /**
+   * The gardener's way somewhere: the pigs' paths (round the barn walls and in by the door, into the gardens by their
+   * gates), but straight into the hay field from its nearest edge (and out again the same way).
+   */
+  private gardenerPath(g: Gardener, to: P): P[] | null {
+    const field = owns('meadow')
+    const inField = (p: P, pad = 0) => field && inRect(p, HAY_FIELD, pad)
+    // From patch to patch: straight across.
+    if (inField(g, 0.3) && inField(to)) return [to]
+    // Just outside each side of the field, nearest first (one may be up against the fence).
+    const edges = (p: P): P[] => {
+      const b = HAY_FIELD
+      const out = 0.8
+      return [
+        { x: b.x0 - out, z: p.z },
+        { x: b.x1 + out, z: p.z },
+        { x: p.x, z: b.z0 - out },
+        { x: p.x, z: b.z1 + out },
+      ].sort((u, v) => dist(p, u) - dist(p, v))
+    }
+    const froms = inField(g, 0.3) ? edges(g) : [{ x: g.x, z: g.z }]
+    const tos = inField(to) ? edges(to) : [to]
+    for (const a of froms)
+      for (const b of tos) {
+        const path = pigPath(a, b, 0.35, true)
+        if (!path) continue
+        return [...(a.x === g.x && a.z === g.z ? [] : [a]), ...path, ...(b === to ? [] : [to])]
+      }
+    return null
+  }
+
+  /** What the gardener does next: the nearest of the jobs that matter most right now (null: nothing to do). */
+  private gardenerTask(g: Gardener): GardenerTask | null {
+    const opts: GardenerTask[] = []
+    const add = (key: string, to: P, msg: ClientMsg | null, near = 1.2) => {
+      if ((g.skip.get(key) ?? 0) <= this.t) opts.push({ key, to, msg, near })
+    }
+    const nearest = () => {
+      const best = opts.sort((a, b) => dist(g, a.to) - dist(g, b.to))[0] ?? null
+      opts.length = 0
+      return best
+    }
+    const hopperMaxNow = hopperMax(this.upgrades)
+    const hoppers = HOPPERS.map((_, i) => i).filter((i) => this.hopperBuilt(i))
+    const pellets = (i: number) => this.foods.get(HOPPER_ID + i)!.bites
+
+    // A sack in hand: into the emptiest hopper with room (or back in the bin).
+    if (g.sack) {
+      const low = hoppers.filter((i) => pellets(i) < hopperMaxNow).sort((a, b) => pellets(a) - pellets(b))[0]
+      return low === undefined ? { key: 'sack', to: FEED_BIN, msg: { t: 'sack' }, near: 1.2 } : { key: `pour:${low}`, to: HOPPERS[low], msg: { t: 'pour', hopper: low }, near: 1.4 }
+    }
+    // A hopper running low, and a sack to be had: fetch one.
+    if (this.sacks > 0 && hoppers.some((i) => pellets(i) < GARDENER_HOPPER * hopperMaxNow)) {
+      add('sack', FEED_BIN, { t: 'sack' })
+      const t = nearest()
+      if (t) return t
+    }
+
+    // Picking (by day, with room in the basket): ripe beds, fallen apples, hay that's grown back. And replanting.
+    const room = this.basketRoom(g)
+    if (room < GARDENER_ROOM) g.unloading = true
+    if (!this.night && !g.unloading) {
+      this.beds.forEach((bed, i) => {
+        if (!this.bedOpen(i)) return
+        if (bed.stage === 'ripe' && room >= GARDENER_ROOM) add(`harvest:${i}`, BEDS[i], { t: 'harvest', bed: i }, 1)
+        if (bed.stage === 'empty') add(`plant:${i}`, BEDS[i], { t: 'plant', bed: i }, 1)
+      })
+      if (room >= GARDENER_ROOM)
+        for (const food of this.foods.values()) if (food.kind === 'apple' && food.tree !== null && food.landed && !food.bowl) add(`apple:${food.id}`, food, { t: 'gather', food: food.id })
+      if (owns('meadow') && room >= Math.max(GARDENER_ROOM, HAY_SLOTS))
+        HAY_PATCHES.forEach((patch, i) => {
+          if (this.t >= this.hayField[i]) add(`hay:${i}`, center(patch), { t: 'hay', patch: i }, 0.3)
+        })
+      const t = nearest()
+      if (t) return t
+    }
+
+    // Putting it all away: hay in a rack with room (or onto a haystack), veg in a bowl with room (or the salad).
+    if (g.hay > 0) {
+      HAY_RACKS.forEach((r, i) => {
+        if (rackBuilt(i, this.upgrades) && this.foods.get(RACK_ID + i)!.bites < hayRackMax(this.upgrades)) add(`rack:${i}`, rackFront(r, 0.9), { t: 'rack', rack: i }, 0.4)
+      })
+      if (!opts.length && owns('meadow'))
+        HAY_STACKS.forEach((s, i) => {
+          if (this.hayStacks[i] < hayStackMax(this.upgrades)) add(`stack:${i}`, s, { t: 'stack', stack: i }, 1)
+        })
+    }
+    const veg = VEGGIES.find((_, i) => g.basket[i] > 0)
+    if (veg) {
+      // Bowls running low first, then any with room, or the salad.
+      const bowls = (below: number) =>
+        BOWLS.forEach((b, i) => {
+          if (this.foods.get(i)!.bites < below) add(`fill:${i}`, b, { t: 'fill', bowl: i, veg })
+        })
+      if (!opts.length) bowls(BOWL_MAX / 2)
+      if (!opts.length) {
+        bowls(BOWL_MAX - VEG_BITES[veg])
+        if (!this.saladServed && this.saladSize() < saladMax(this.pigs.length)) add('salad', SALAD_TABLE, { t: 'salad' })
+      }
+    }
+    const t = nearest()
+    if (t) return t
+    // All put away (or nowhere to put the rest): back to picking.
+    if (g.unloading) {
+      g.unloading = false
+      if (!this.night && this.basketRoom(g) >= GARDENER_ROOM) return this.gardenerTask(g)
+    }
+    // Nothing to do: back to their spot in the yard.
+    return dist(g, GARDENER_HOME) > 0.6 ? { key: 'home', to: GARDENER_HOME, msg: null, near: 0.3 } : null
   }
 
   // ---------------------------------------------------------------- the clock
@@ -1247,6 +1663,8 @@ export class Farm {
     for (const bed of this.beds) if (bed.stage === 'growing' && this.t >= bed.readyAt) bed.stage = 'ripe'
 
     this.breed(dtMs)
+    this.updateVet()
+    this.updateGardener(dt)
     this.spawnPredators()
     for (const pred of [...this.preds]) this.updatePred(pred, dt)
     // How fast each farmer's going, for herding (smoothed: their moves don't arrive exactly once a tick).
@@ -1264,6 +1682,7 @@ export class Farm {
 
   private setState(p: Pig, state: PigState, ms = 0) {
     if (state !== 'raid') p.raid = null
+    if (!this.night) p.bedTries = 0
     p.state = state
     p.until = this.t + ms
     if (state !== 'seek' && state !== 'eat') p.food = null
@@ -1380,16 +1799,24 @@ export class Farm {
 
   /** Each pig's usual bed spot (spread round, so they don't all pile into one). */
   private bedSpot(p: Pig): P {
-    return BED_SPOTS[(p.id * 7) % BED_SPOTS.length]
+    return BED_SPOTS[(p.id * BED_STEP) % BED_SPOTS.length]
   }
 
-  /** Tucked up where a pig should sleep: at a bed spot, or one of the few allowed to doze off on a food pile. */
+  /**
+   * Tucked up where a pig should sleep: at a bed spot, snuggled up to others asleep near one (a cuddle pile, rather
+   * than pacing round them trying to get to its own spot), or one of the few allowed to doze off on a food pile.
+   */
   private goodBed(p: Pig) {
-    if (BED_SPOTS.some((b) => dist(p, b) < 1)) return true
-    const piles = [...BOWLS, ...HOPPERS, SALAD_SPOT]
+    if (atBed(p) || this.snuggled(p)) return true
+    const piles = [...BOWLS, ...HOPPERS, ...SALAD_SPOTS]
     const onPile = (x: P) => piles.some((f) => dist(x, f) < 1.3)
     if (!onPile(p)) return false
     return this.pigs.filter((o) => o !== p && o.state === 'sleep' && onPile(o)).length < FOOD_SLEEPERS
+  }
+
+  /** Up against a pig asleep in the barn, near the beds round the edge (not out in the middle): a cuddle pile. */
+  private snuggled(p: Pig) {
+    return isInside(p) && BED_SPOTS.some((b) => dist(p, b) < SNUGGLE_RANGE) && this.pigs.some((o) => o !== p && o.state === 'sleep' && dist(p, o) < SNUGGLE)
   }
 
   /** In out of the rain (not to bed). */
@@ -1531,8 +1958,9 @@ export class Farm {
 
   private decide(p: Pig) {
     const inside = isInside(p)
-    const platter = this.foods.get(SALAD_ID)!
-    if (platter.bites > 0 && p.hunger < FULL && !(this.doorShut && !inside)) return this.seek(p, platter)
+    // Supper's out: each pig has its own platter of those still going (so they spread round them).
+    const out = SALAD_SPOTS.map((_, i) => this.foods.get(SALAD_ID + i)!).filter((f) => f.bites > 0)
+    if (out.length && p.hunger < FULL && !(this.doorShut && !inside)) return this.seek(p, out[p.id % out.length])
     if (this.night) {
       if (!inside) return this.goHome(p)
       if (p.hunger < HUNGRY) {
@@ -1540,7 +1968,12 @@ export class Farm {
         if (food) return this.seek(p, food)
       }
       // Off to bed if it's not somewhere snug (the middle of the floor won't do).
-      if (!this.goodBed(p)) return this.goHome(p)
+      if (!this.goodBed(p)) {
+        // Can't get to its bed for the crowd: it just lies down here.
+        if (isInside(p) && p.bedTries >= BED_TRIES) return this.setState(p, 'sleep', this.between(15_000, 40_000))
+        p.bedTries++
+        return this.goHome(p)
+      }
       return this.setState(p, 'sleep', this.between(8000, 25_000))
     }
     if (this.raining && !inside) return this.goIn(p)
@@ -1905,8 +2338,8 @@ export class Farm {
       if (this.t >= p.lostUntil) this.comeBack(p)
       return
     }
-    // Up on the judging table at the show: sitting nicely till it's picked up again.
-    if (p.state === 'show') return
+    // Up on the judging table at the show, or at the vet's: sitting nicely till it's picked up (or let go) again.
+    if (p.state === 'show' || p.state === 'vet') return
     if (p.state === 'held') {
       const f = p.heldBy === null ? undefined : this.farmers.get(p.heldBy)
       if (!f) return this.setState(p, 'idle', 500)
@@ -1983,7 +2416,7 @@ export class Farm {
     }
 
     // Someone's carrying the salad platter: the peckish ones come wheeking along after it.
-    const carrier = this.platterCarrier()
+    const carrier = this.platterCarrier(p)
     if (carrier && CALM.includes(p.state) && p.hunger < FULL && dist(p, carrier) < PLATTER_LURE && !(this.doorShut && isInside(p) !== isInside(carrier))) {
       this.setState(p, 'chase', 0)
       p.path = []
@@ -2001,7 +2434,7 @@ export class Farm {
         return this.playing(p, dt)
       case 'chase': {
         // Close behind whoever has the platter, fanned out a little, nose up.
-        const c = this.platterCarrier()
+        const c = this.platterCarrier(p)
         if (!c || dist(p, c) > PLATTER_LURE * 1.5) return this.decide(p)
         const ahead = facing(c.yaw)
         const fan = (((p.id * 0.618) % 1) - 0.5) * 2.4
@@ -2046,6 +2479,8 @@ export class Farm {
       case 'scoot':
       case 'flee': {
         const state = p.state
+        // Bedtime, and it's come up against the others asleep: curl up with them here.
+        if (state === 'home' && this.night && this.snuggled(p)) return this.setState(p, 'sleep', this.between(15_000, 40_000))
         if (!this.moveTo(p, { x: p.tx, z: p.tz }, SPEED[state]! * this.pace(p, state === 'flee' ? 'flee' : 'walk'), dt)) return
         if (state === 'flee') return this.setState(p, this.hidden(p) ? 'hide' : 'idle', this.between(8000, 14_000))
         if (state === 'zoom') return this.decide(p)
@@ -2394,9 +2829,9 @@ export class Farm {
     // …and a new bale of hay on the hay table.
     this.bale = BALE_ARMFULS
     // Last night's leftovers get cleared away; a new platter can be made (and one still being carried about goes back).
-    for (const f of this.farmers.values()) f.platter = false
+    for (const f of this.farmers.values()) this.platterBack(f)
     this.saladServed = false
-    this.foods.get(SALAD_ID)!.bites = 0
+    for (let i = 0; i < SALAD_SPOTS.length; i++) this.foods.get(SALAD_ID + i)!.bites = 0
     this.craving = this.pick(VEGGIES.filter((v) => v !== this.craving))
     this.alert('fun', `🤤 Today the piggies are craving ${this.craving}s!`)
     const kinds = this.jobKinds()
@@ -2742,7 +3177,7 @@ export class Farm {
       hay: f.hay,
       aboard: f.aboard,
       atShow: f.atShow,
-      platter: f.platter,
+      platter: !!f.platter,
     }))
     const pigs: PigSnap[] = this.pigs.map((p) => ({
       id: p.id,
@@ -2762,6 +3197,15 @@ export class Farm {
       time: Math.round(this.dayTime * 10_000) / 10_000,
       day: this.day,
       farmers,
+      gardener: !this.gardener || this.gardener.away ? null : {
+        x: r2(this.gardener.x),
+        z: r2(this.gardener.z),
+        yaw: r2(this.gardener.yaw),
+        basket: [...this.gardener.basket],
+        hay: this.gardener.hay,
+        sack: this.gardener.sack,
+        working: this.gardener.busy && this.t < this.gardener.workUntil,
+      },
       pigs,
       foods: ground.map((f) => ({ id: f.id, kind: f.kind, x: r2(f.x), z: r2(f.z), bites: f.bites })),
       beds: this.beds.map((b, i) => ({
@@ -2790,7 +3234,7 @@ export class Farm {
       paused: this.paused,
       show: this.showSnap(),
       land: [...this.land],
-      salad: { veg: [...this.salad], served: this.saladServed, bites: this.foods.get(SALAD_ID)!.bites },
+      salad: { veg: [...this.salad], served: this.saladServed, bites: SALAD_SPOTS.map((_, i) => this.foods.get(SALAD_ID + i)!.bites) },
     }
   }
 
@@ -2901,7 +3345,7 @@ export class Farm {
         this.diary.set(name, clean)
       }
     this.doorShut = s.door === true
-    if (Array.isArray(s.salad) && s.salad.length === VEGGIES.length && s.salad.every(num)) this.salad = s.salad.map((n) => Math.max(0, Math.min(SALAD_MAX, n)))
+    if (Array.isArray(s.salad) && s.salad.length === VEGGIES.length && s.salad.every(num)) this.salad = s.salad.map((n) => Math.max(0, Math.min(saladMax(this.pigs.length), n)))
     this.saladServed = s.saladServed === true
     if (num(s.sacks)) this.sacks = Math.max(0, Math.min(HOPPERS.length + extraSacks(this.upgrades), s.sacks!))
     if (s.baskets && typeof s.baskets === 'object')

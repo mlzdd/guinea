@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { Farm, SALAD_ID } from '../../src/core/farm.ts'
-import { pigCanStand, BEDS, GARDENS, SALAD_SPOT, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
+import { Farm, HOPPER_ID, RACK_ID, SALAD_ID } from '../../src/core/farm.ts'
+import { pigCanStand, BOWLS, HAY_RACKS, VET_SLOTS, VET_TABLE, BEDS, GARDENS, SALAD_SPOT, SALAD_SPOTS, TUNNELS, TUNNEL_R, HIDEY_D, HIDEY_W, inRect, BOUNDS, DOOR_MID, DOOR_OUT, FENCE_EDGES, nearestFence, HIDEYS, HIDEY_H, SALAD_TABLE, canBuy, dist, groundAt, isInside, onFarm, settleFarmer, settlePig } from '../../src/core/map.ts'
 import { moveFarmer, type Body } from '../../src/core/move.ts'
 import { CAR_FARM, JUDGE_MS, RESULTS_MS, RIVALS, SHOW_AT, SHOW_BOARD_MS, SHOW_PRIZES, SHOW_TAKING_PART, SPOTS, TABLE_SPOT, total } from '../../src/core/show.ts'
 import { parseClientMsg, type ServerMsg } from '../../src/core/protocol.ts'
@@ -17,6 +17,7 @@ import {
   GRAVITY,
   GROW_MS,
   HERD_MAX,
+  BIG_BARN_EXTRA,
   ISSUE_BIT,
   LAND,
   LITTER,
@@ -25,6 +26,12 @@ import {
   PREGNANCY_DAYS,
   RUN_SPEED,
   SALAD_BITES,
+  saladMax,
+  VET_MS,
+  GARDENER_SPEED,
+  GARDENER_NAME,
+  platters,
+  PLATTER_MAX,
   SALAD_FROM,
   TICK_MS,
   SQUARE_IDS,
@@ -32,6 +39,7 @@ import {
   dayLength,
   farmDays,
   farmTime,
+  clockHours,
   poorly,
   JOB_PAY,
   JUMP_V,
@@ -638,7 +646,7 @@ describe('salad night', () => {
     farm.handle(id, { t: 'salad' })
     expect(farm.salad).toEqual([4, 4, 0, 0, 0])
     expect(me.basket).toEqual([0, 0, 0, 0, 0])
-    expect(farm.snapshot().salad).toMatchObject({ veg: [4, 4, 0, 0, 0], served: false, bites: 0 })
+    expect(farm.snapshot().salad).toMatchObject({ veg: [4, 4, 0, 0, 0], served: false, bites: [0, 0, 0] })
     // Not enough variety yet.
     dusk(farm)
     farm.handle(id, { t: 'serve' })
@@ -653,11 +661,11 @@ describe('salad night', () => {
     farm.out = []
     // Picked up at the station, carried to the middle of the barn, put down.
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(true)
+    expect(me.platter).not.toBeNull()
     expect(farm.saladServed).toBe(false)
     Object.assign(me, SALAD_SPOT, { z: SALAD_SPOT.z + 1 })
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(false)
+    expect(me.platter).toBeNull()
     expect(farm.saladServed).toBe(true)
     expect(farm.foods.get(SALAD_ID)!.bites).toBe(14 * SALAD_BITES)
     expect(alerts(farm, 'fun').some((a) => a.text.includes('salad'))).toBe(true)
@@ -676,6 +684,60 @@ describe('salad night', () => {
     expect(farm.saladServed).toBe(false)
   })
 
+  it('a big herd gets more salad, carried in on several platters of up to PLATTER_MAX', () => {
+    const { farm, id, me } = setup()
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    expect(saladMax(farm.pigs.length)).toBe(24)
+    expect(platters(farm.pigs.length)).toBe(1)
+    // The biggest barn's herd still has a spot on the floor for every platter it needs.
+    expect(platters(HERD_MAX + 2 * BIG_BARN_EXTRA)).toBeLessThanOrEqual(SALAD_SPOTS.length)
+    // Forty piggies: room for 80 veg, two platters.
+    farm.pigs.push(...Array.from({ length: 28 }, (_, i) => ({ ...farm.pigs[i % 12], id: 12 + i })))
+    expect(platters(farm.pigs.length)).toBe(2)
+    me.basket = [20, 20, 20, 20, 0]
+    farm.handle(id, { t: 'salad' })
+    expect(farm.saladSize()).toBe(80)
+
+    dusk(farm)
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter!.reduce((a, b) => a + b, 0)).toBe(PLATTER_MAX)
+    expect(me.platter).toEqual([10, 10, 10, 10, 0])
+    expect(farm.saladSize()).toBe(40)
+    // Back on the station, veg and all; then out to the first spot.
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBeNull()
+    expect(farm.saladSize()).toBe(80)
+    farm.handle(id, { t: 'serve' })
+    Object.assign(me, SALAD_SPOTS[0])
+    farm.handle(id, { t: 'serve' })
+    expect(farm.foods.get(SALAD_ID)!.bites).toBe(PLATTER_MAX * SALAD_BITES)
+    expect(farm.saladServed).toBe(true)
+
+    // The rest goes on the second platter, to the other spot (not on top of the first).
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    Object.assign(me, SALAD_SPOTS[0])
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).not.toBeNull()
+    Object.assign(me, SALAD_SPOTS[1])
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBeNull()
+    expect(farm.foods.get(SALAD_ID + 1)!.bites).toBe(PLATTER_MAX * SALAD_BITES)
+    expect(farm.saladSize()).toBe(0)
+    expect(farm.snapshot().salad.bites).toEqual([80, 80, 0])
+    // Nothing left to carry in, and no third spot needed.
+    Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
+    farm.handle(id, { t: 'serve' })
+    expect(me.platter).toBeNull()
+
+    // The herd shares them out.
+    for (const p of farm.pigs) Object.assign(p, { hunger: 60, state: 'idle', until: 0 })
+    run(farm, 15_000)
+    const at = (i: number) => farm.pigs.filter((p) => p.food === SALAD_ID + i).length
+    expect(at(0)).toBeGreaterThan(5)
+    expect(at(1)).toBeGreaterThan(5)
+  })
+
   it('not before dusk, and only at the station', () => {
     const { farm, id, me } = setup()
     farm.salad = [3, 3, 3, 3, 0]
@@ -685,18 +747,18 @@ describe('salad night', () => {
     dusk(farm)
     Object.assign(me, { x: 5, z: 5 })
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(false)
+    expect(me.platter).toBeNull()
     Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(true)
+    expect(me.platter).not.toBeNull()
     // Not just anywhere: only in the middle of the barn (or back on the station).
     Object.assign(me, { x: 5, z: -20 })
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(true)
+    expect(me.platter).not.toBeNull()
     expect(farm.saladServed).toBe(false)
     Object.assign(me, { x: SALAD_TABLE.x, z: SALAD_TABLE.z + 1 })
     farm.handle(id, { t: 'serve' })
-    expect(me.platter).toBe(false)
+    expect(me.platter).toBeNull()
     expect(farm.saladServed).toBe(false)
     // Hands full while carrying it.
     farm.handle(id, { t: 'serve' })
@@ -1320,5 +1382,129 @@ describe('sneaky piggies', () => {
     const sneaky = Array.from({ length: 30 }, (_, i) => isSneaky(i)).filter(Boolean).length
     expect(sneaky).toBeGreaterThan(10)
     expect(sneaky).toBeLessThan(20)
+  })
+})
+
+describe('vet clinic', () => {
+  it('leave up to 3 piggies with the vet: each is checked, fixed and let go in turn', () => {
+    const { farm, id, me } = setup()
+    const pigs = farm.pigs.slice(0, 4)
+    pigs.forEach((p, i) => Object.assign(p, { x: VET_TABLE.x + i * 0.3, z: VET_TABLE.z + 1.5, issues: i === 0 ? ISSUE_BIT.nails | ISSUE_BIT.mites : 0, state: 'idle', until: Infinity }))
+    Object.assign(me, { x: VET_TABLE.x, z: VET_TABLE.z + 1.4 })
+    const leave = (n: number) => {
+      farm.handle(id, { t: 'pickup', pig: n })
+      expect(me.holding).toBe(n)
+      farm.handle(id, { t: 'vet' })
+    }
+    // Not before the clinic's built.
+    leave(0)
+    expect(me.holding).toBe(0)
+    farm.handle(id, { t: 'putdown' })
+    farm.upgrades.push('clinic')
+    for (const n of [0, 1, 2]) {
+      leave(n)
+      expect(me.holding).toBeNull()
+      expect(farm.pigs[n].state).toBe('vet')
+    }
+    expect(dist(farm.pigs[0], VET_SLOTS[0])).toBeLessThan(0.01)
+    // The queue's full.
+    leave(3)
+    expect(me.holding).toBe(3)
+    farm.handle(id, { t: 'putdown' })
+    // Nobody can pick one up off the table.
+    farm.handle(id, { t: 'pickup', pig: 1 })
+    expect(me.holding).toBeNull()
+
+    run(farm, VET_MS + 100)
+    const first = farm.pigs[0]
+    expect(first.issues).toBe(0)
+    expect(first.state).not.toBe('vet')
+    expect(isInside(first)).toBe(true)
+    expect(farm.vetQueue.map((q) => q.pig)).toEqual([1, 2])
+    expect(dist(farm.pigs[1], VET_SLOTS[0])).toBeLessThan(0.01)
+    expect(alerts(farm, 'care').some((a) => a.text.includes('trimmed nails'))).toBe(true)
+    expect(farm.diary.get('Ann')!.fix).toBe(2)
+    run(farm, 2 * VET_MS + 200)
+    expect(farm.vetQueue).toEqual([])
+    expect(farm.pigs.slice(0, 3).every((p) => p.state !== 'vet')).toBe(true)
+  })
+})
+
+describe('gardener', () => {
+  /** Hired at 8am, when they're on shift. */
+  const hire = (farm: Farm) => {
+    farm.t = at(1, hour(8))
+    farm.upgrades.push('gardener')
+    farm.tick(TICK_MS)
+    return farm.gardener!
+  }
+  /** The time of day (0..1) at this hour on the farm clock (6am is 0; night starts at 8pm). */
+  const hour = (h: number) => (h < 20 ? ((h - 6) / 14) * NIGHT_START : NIGHT_START + ((h - 20) / 10) * (1 - NIGHT_START))
+
+  it('works 7am to 7pm: home over the fence for the night, and back in the morning', () => {
+    const { farm } = setup()
+    const g = hire(farm)
+    expect(clockHours(farm.dayTime)).toBeCloseTo(8, 0)
+    expect(farm.snapshot().gardener).not.toBeNull()
+    g.sack = true
+    const sacks = farm.sacks
+    // 7pm: off home (the sack back in the bin), out over the fence, then gone.
+    farm.t = at(1, hour(19)) + 100
+    farm.out = []
+    farm.tick(TICK_MS)
+    expect(g.sack).toBe(false)
+    expect(farm.sacks).toBe(sacks + 1)
+    expect(alerts(farm, 'farmer').some((a) => a.text.includes('off home'))).toBe(true)
+    expect(run(farm, 60_000, () => g.away)).toBe(true)
+    expect(onFarm(g)).toBe(false)
+    expect(farm.snapshot().gardener).toBeNull()
+    // Not before 7am…
+    farm.t = at(2, hour(6.5))
+    run(farm, 2000)
+    expect(g.away).toBe(true)
+    // …then back in over the fence.
+    farm.t = at(2, hour(7)) + 100
+    farm.out = []
+    farm.tick(TICK_MS)
+    expect(g.away).toBe(false)
+    expect(farm.snapshot().gardener).not.toBeNull()
+    expect(alerts(farm, 'farmer').some((a) => a.text.includes('here for the day'))).toBe(true)
+    expect(run(farm, 10_000, () => onFarm(g))).toBe(true)
+  })
+
+  it('harvests a ripe bed and puts the veg in the bowls, slowly', () => {
+    const { farm } = setup()
+    for (let i = 0; i < farm.beds.length; i++) Object.assign(farm.beds[i], { stage: 'growing', readyAt: Infinity })
+    Object.assign(farm.beds[0], { stage: 'ripe', eaten: 0 })
+    for (let i = 0; i < BOWLS.length; i++) farm.foods.get(i)!.bites = 0
+    farm.hayField = farm.hayField.map(() => Infinity)
+    for (const f of [...farm.foods.values()]) if (f.kind === 'apple') farm.foods.delete(f.id)
+    const g = hire(farm)
+    expect(farm.snapshot().gardener).not.toBeNull()
+    // It walks, it doesn't run.
+    const from = { x: g.x, z: g.z }
+    run(farm, 1000)
+    expect(dist(g, from)).toBeLessThanOrEqual(GARDENER_SPEED * 1.05 + 0.01)
+    expect(run(farm, 60_000, () => farm.beds[0].stage !== 'ripe')).toBe(true)
+    expect(g.basket[veg('carrot')]).toBeGreaterThan(0)
+    expect(run(farm, 90_000, () => g.basket.every((n) => n === 0))).toBe(true)
+    expect(BOWLS.some((_, i) => farm.foods.get(i)!.kind === 'carrot' && farm.foods.get(i)!.bites > 0)).toBe(true)
+    // …and replants the bed (no jobs or diary for the gardener).
+    expect(run(farm, 60_000, () => farm.beds[0].stage === 'growing')).toBe(true)
+    expect(farm.diary.has(GARDENER_NAME)).toBe(false)
+  })
+
+  it('cuts hay into the racks and tops up a low hopper with a sack from the bin', () => {
+    const { farm } = setup()
+    for (const bed of farm.beds) Object.assign(bed, { stage: 'growing', readyAt: Infinity })
+    for (const f of [...farm.foods.values()]) if (f.kind === 'apple') farm.foods.delete(f.id)
+    farm.foods.get(HOPPER_ID)!.bites = 0
+    farm.sacks = 1
+    for (let i = 0; i < HAY_RACKS.length; i++) farm.foods.get(RACK_ID + i)!.bites = 0
+    const g = hire(farm)
+    expect(run(farm, 60_000, () => farm.foods.get(HOPPER_ID)!.bites > 0)).toBe(true)
+    expect(farm.sacks).toBe(0)
+    expect(g.sack).toBe(false)
+    expect(run(farm, 200_000, () => HAY_RACKS.some((_, i) => farm.foods.get(RACK_ID + i)!.bites > 0))).toBe(true)
   })
 })

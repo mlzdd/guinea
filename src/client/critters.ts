@@ -53,6 +53,14 @@ const STRAW = 0xe8c66a
 const WELLIES = 0x2f5a2c
 const SHIRT = 0xf6efe0
 
+/**
+ * Who it is: a farmer, the gardener (green dungarees, a wide floppy sun hat with a flower, a red neckerchief and a grey
+ * beard, so nobody mistakes them for a player) or the vet (a long white coat and a stethoscope, no hat).
+ */
+export type Outfit = 'farmer' | 'gardener' | 'vet'
+const GARDENER_GREEN = 0x4d7a32
+const GARDENER_HAT = 0x9a8a52
+
 /** A farmer in a straw hat, overalls in their colour and green wellies. Faces −Z. */
 export class FarmerModel {
   readonly root = new THREE.Group()
@@ -66,34 +74,66 @@ export class FarmerModel {
   private readonly platter = new THREE.Group()
   private throwT = 1
   private walkPhase = 0
+  /** The gardener walks slowly, but with proper steps (a farmer's stride shrinks to a shuffle at that speed). */
+  private potter = false
 
-  constructor(color: number, name: string | null) {
+  constructor(color: number, name: string | null, outfit: Outfit = 'farmer') {
     const r = this.root
+    this.potter = outfit === 'gardener'
+    if (outfit === 'gardener') color = GARDENER_GREEN
+    const vet = outfit === 'vet'
+    const legColor = vet ? 0x3a4f7a : color
     for (const side of [-1, 1]) {
-      const leg = limb(color, 0.2, 0.8, [side * 0.13, 0.82, 0])
-      leg.add(part(box, WELLIES, [0.22, 0.4, 0.26], [0, -0.62, -0.02]))
+      const leg = limb(legColor, 0.2, 0.8, [side * 0.13, 0.82, 0])
+      leg.add(part(box, vet ? 0x2b2b30 : WELLIES, [0.22, 0.4, 0.26], [0, -0.62, -0.02]))
       r.add(leg)
       this.legs.push(leg)
     }
-    // Overalls with a bib over a cream shirt
-    r.add(part(box, SHIRT, [0.5, 0.6, 0.3], [0, 1.15, 0]))
-    r.add(part(box, color, [0.52, 0.38, 0.32], [0, 0.97, 0]))
-    r.add(part(box, color, [0.36, 0.3, 0.05], [0, 1.25, -0.16]))
-    for (const side of [-1, 1]) r.add(part(box, color, [0.06, 0.32, 0.31], [side * 0.15, 1.3, 0]))
+    const sleeve = vet ? 0xfbfbf8 : outfit === 'gardener' ? 0xe9dcc0 : SHIRT
+    if (vet) {
+      // A long white coat, open over a blue top, and a stethoscope round the neck.
+      r.add(part(box, 0xfbfbf8, [0.54, 0.95, 0.34], [0, 1.0, 0]))
+      r.add(part(box, 0x6a9ad0, [0.16, 0.5, 0.05], [0, 1.2, -0.16]))
+      r.add(part(new THREE.TorusGeometry(1, 0.12, 6, 16), 0x2b2b30, [0.13, 0.13, 0.13], [0, 1.36, -0.08]).rotateX(Math.PI / 2.4))
+      r.add(part(sphere, 0xc0c0c8, [0.04, 0.04, 0.02], [0.06, 1.1, -0.18]))
+    } else {
+      // Overalls with a bib over a shirt
+      r.add(part(box, sleeve, [0.5, 0.6, 0.3], [0, 1.15, 0]))
+      r.add(part(box, color, [0.52, 0.38, 0.32], [0, 0.97, 0]))
+      r.add(part(box, color, [0.36, 0.3, 0.05], [0, 1.25, -0.16]))
+      for (const side of [-1, 1]) r.add(part(box, color, [0.06, 0.32, 0.31], [side * 0.15, 1.3, 0]))
+    }
     for (const side of [-1, 1]) {
       const hand = part(sphere, SKIN, [0.07, 0.07, 0.07], [0, -0.62, 0])
-      const arm = limb(SHIRT, 0.13, 0.58, [side * 0.33, 1.42, 0], hand)
+      const arm = limb(sleeve, 0.13, 0.58, [side * 0.33, 1.42, 0], hand)
       r.add(arm)
       this.arms.push(arm)
     }
-    // Head and straw hat
+    // Head
     r.add(part(sphere, SKIN, [0.19, 0.21, 0.19], [0, 1.66, 0]))
     r.add(part(sphere, 0x1c1a24, [0.025, 0.03, 0.02], [-0.07, 1.69, -0.17], false))
     r.add(part(sphere, 0x1c1a24, [0.025, 0.03, 0.02], [0.07, 1.69, -0.17], false))
     r.add(part(sphere, 0xe89a8a, [0.04, 0.03, 0.03], [0, 1.62, -0.19], false))
-    r.add(part(cyl, STRAW, [0.42, 0.03, 0.42], [0, 1.83, 0]))
-    r.add(part(cyl, STRAW, [0.21, 0.18, 0.21], [0, 1.93, 0]))
-    r.add(part(cyl, color, [0.215, 0.05, 0.215], [0, 1.88, 0]))
+    if (outfit === 'farmer') {
+      // Straw hat with a band in their colour
+      r.add(part(cyl, STRAW, [0.42, 0.03, 0.42], [0, 1.83, 0]))
+      r.add(part(cyl, STRAW, [0.21, 0.18, 0.21], [0, 1.93, 0]))
+      r.add(part(cyl, color, [0.215, 0.05, 0.215], [0, 1.88, 0]))
+    } else if (outfit === 'gardener') {
+      // A big floppy sun hat with a flower in it, a bushy grey beard and a red neckerchief.
+      r.add(part(cyl, GARDENER_HAT, [0.55, 0.025, 0.55], [0, 1.81, 0]).rotateX(0.08))
+      r.add(part(sphere, GARDENER_HAT, [0.22, 0.14, 0.22], [0, 1.86, 0]))
+      r.add(part(sphere, 0xf2d43a, [0.05, 0.05, 0.05], [0.2, 1.9, -0.08], false))
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2
+        r.add(part(sphere, 0xf6f1ff, [0.045, 0.02, 0.045], [0.2 + Math.cos(a) * 0.05, 1.9, -0.08 + Math.sin(a) * 0.05], false))
+      }
+      r.add(part(sphere, 0xd8d6d0, [0.15, 0.13, 0.1], [0, 1.53, -0.12]))
+      r.add(part(cyl, 0xc8352b, [0.2, 0.06, 0.18], [0, 1.43, -0.01]))
+    } else {
+      // Neat grey hair.
+      r.add(part(sphere, 0x8a8580, [0.2, 0.12, 0.2], [0, 1.78, 0.02]))
+    }
 
     // Wicker basket on the left arm, with a heap of veg when it's got some in.
     this.basket.add(part(cyl, 0xb07a3f, [0.18, 0.18, 0.18], [0, 0, 0]))
@@ -127,7 +167,7 @@ export class FarmerModel {
     r.add(this.platter)
 
     if (name) {
-      const tag = textSprite(name)
+      const tag = textSprite(name, outfit === 'gardener' ? '#b9f28a' : outfit === 'vet' ? '#bfe3ff' : '#ffffff')
       tag.position.y = 2.35
       r.add(tag)
     }
@@ -147,11 +187,13 @@ export class FarmerModel {
     this.platter.visible = platter
     if (platter) holding = true
     this.hay.visible = hay && !holding
-    this.walkPhase += dt * Math.min(speed, 9) * 2.2
-    const swing = speed > 0.3 ? Math.sin(this.walkPhase) * Math.min(0.7, speed * 0.12) : 0
+    const walking = speed > 0.3
+    // Pottering: about two steps a second and a good stride, however slow.
+    this.walkPhase += dt * (this.potter && walking ? 6.5 : Math.min(speed, 9) * 2.2)
+    const swing = walking ? Math.sin(this.walkPhase) * (this.potter ? 0.5 : Math.min(0.7, speed * 0.12)) : 0
     this.legs[0].rotation.x = swing
     this.legs[1].rotation.x = -swing
-    this.root.position.y = speed > 0.3 ? Math.abs(Math.cos(this.walkPhase)) * 0.05 : 0
+    this.root.position.y = walking ? Math.abs(Math.cos(this.walkPhase)) * (this.potter ? 0.06 : 0.05) : 0
     if (airborne) {
       // Knees tucked.
       this.root.position.y = 0

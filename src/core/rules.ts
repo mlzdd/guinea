@@ -23,6 +23,14 @@ export const OUT_LATE = NIGHT_START + (1 - NIGHT_START) / 10
 export const START_TIME = 0.05
 /** Pigs sleep at their bed spots (BED_SPOTS in map.ts); only this many will doze off on a food pile instead. */
 export const FOOD_SLEEPERS = 2
+/**
+ * At bedtime a pig that comes up against one already asleep (this close) curls up with it rather than shoving through to
+ * its own spot, as long as it's within SNUGGLE_RANGE of a bed spot (round the edges, not out in the middle).
+ */
+export const SNUGGLE = 1.1
+export const SNUGGLE_RANGE = 3
+/** A pig that still can't get to bed after this many goes (a crowd in the way) lies down where it is, in the barn. */
+export const BED_TRIES = 3
 /** At night, once every pig is tucked up asleep in the barn for this long (and nothing's prowling), it's morning. */
 export const SLEEP_SKIP_MS = 3000
 
@@ -205,6 +213,25 @@ export const VISIBLE_ISSUES = ISSUE_BIT.mites | ISSUE_BIT.sniffles
 /** Chance per second of a problem starting. Sniffles only come from being outside at night. */
 export const ISSUE_RATE: Record<Issue, number> = { nails: 1 / 2400, mites: 1 / 3600, sniffles: 1 / 60, teeth: 1 / 6000 }
 
+/** The vet clinic: each piggy left with the vet takes this long to check over and fix; up to VET_QUEUE at a time. */
+export const VET_MS = 6000
+export const VET_QUEUE = 3
+
+/**
+ * The gardener (an upgrade): a helper who walks the farm at GARDENER_SPEED (farmers walk at WALK_SPEED), stopping
+ * GARDENER_WORK_MS at each job. Heads off to put things away when the basket has less than GARDENER_ROOM left, or
+ * there's nothing left to pick; tops up a hopper once it's below GARDENER_HOPPER full.
+ */
+export const GARDENER_SPEED = 1.6
+/** Their shift, on the farm clock (clockHours): home over the fence at 7pm, back at 7am. */
+export const GARDENER_ON = 7
+export const GARDENER_OFF = 19
+/** Nobody can be called this (names can't have emoji), so the gardener never gets the diary or jobs. */
+export const GARDENER_NAME = '🌱 Gardener'
+export const GARDENER_WORK_MS = 1500
+export const GARDENER_ROOM = 3
+export const GARDENER_HOPPER = 0.35
+
 // Predators
 /** Pigs only notice a sneaking fox this close. */
 export const FOX_NOTICE = 3.5
@@ -336,6 +363,12 @@ const UPGRADE_LIST = {
   vet: { tab: 'critters', icon: '🩺', name: 'Vet visits', levels: lv([100, 'Health problems start 30% less often'], [280, 'Health problems start half as often']) },
   orchard: { tab: 'garden', icon: '🍎', name: 'Orchard care', needs: 'orchard', levels: lv([50, 'Apples fall twice as often'], [150, 'Apples fall three times as often'], [350, 'Apples fall four times as often']) },
   compost: { tab: 'garden', icon: '🪱', name: 'Compost heap', levels: lv([60, '+2 veg every harvest'], [160, '+4 veg every harvest'], [380, '+6 veg every harvest']) },
+  gardener: {
+    tab: 'garden',
+    icon: '🌱',
+    name: 'Gardener',
+    levels: lv([260, 'A (slow) gardener who harvests and replants the veg, picks up apples and cuts hay, then puts it all away: veg in the bowls or the salad, hay in the racks or haystacks, and tops up the pellet hoppers']),
+  },
   sprinkler: { tab: 'garden', icon: '💦', name: 'Garden sprinklers', levels: lv([70, 'Crops grow 40% faster'], [180, 'Crops grow 55% faster'], [400, 'Crops grow 65% faster']) },
   fertiliser: { tab: 'garden', icon: '🌾', name: 'Meadow fertiliser', needs: 'meadow', levels: lv([80, 'Hay grows back 30% faster'], [220, 'Hay grows back twice as fast']) },
   bighopper: { tab: 'barn', icon: '🥣', name: 'Bigger hoppers', levels: lv([60, 'Hoppers hold twice the pellets, and the sacks are twice as big'], [160, 'Three times the pellets, in bigger sacks'], [360, 'Four times the pellets, in bigger sacks']) },
@@ -343,6 +376,7 @@ const UPGRADE_LIST = {
   sacks: { tab: 'barn', icon: '📦', name: 'Feed delivery', levels: lv([90, 'An extra sack of pellets every morning'], [250, 'Two extra sacks every morning']) },
   heater: { tab: 'barn', icon: '🔥', name: 'Barn heater', levels: lv([80, 'Cosy barn: pigs inside are happier'], [200, 'Cosier still'], [420, 'Toasty: pigs inside are much happier']) },
   toys: { tab: 'barn', icon: '🧸', name: 'Piggy toys', levels: lv([90, 'Tunnels to play in: the zoomometer fills 25% faster'], [240, 'A whole play park: it fills 45% faster']) },
+  clinic: { tab: 'barn', icon: '💊', name: 'Vet clinic', levels: lv([150, 'A vet at the pharmacy table in the barn: leave up to 3 piggies for a full check-up, fixed and let go after']) },
   nursery: { tab: 'barn', icon: '🍼', name: 'Nursery corner', levels: lv([100, 'Sows are 50% likelier to get pregnant'], [260, 'Sows are twice as likely to get pregnant']) },
   bigbarn: {
     tab: 'barn',
@@ -393,7 +427,13 @@ export const CRAVING_HAPPY = 5
 
 // Salad night: farmers build a salad platter at the station in the barn through the day, then serve it at dusk.
 // Every pig comes in for supper, and the more kinds of veg in it the happier they are.
-export const SALAD_MAX = 30
+/** The station takes SALAD_PER_PIG veg per piggy on the farm (SALAD_BITES each, so everyone gets a good few), at least SALAD_MAX. */
+export const SALAD_MAX = 20
+export const SALAD_PER_PIG = 2
+export const saladMax = (pigs: number) => Math.max(SALAD_MAX, Math.ceil(pigs * SALAD_PER_PIG))
+/** A platter holds up to PLATTER_MAX of it, so a big herd needs a few platters carried in (one SALAD_SPOTS each). */
+export const PLATTER_MAX = 40
+export const platters = (pigs: number) => Math.ceil(saladMax(pigs) / PLATTER_MAX)
 /** Ready to serve with at least this much veg, of at least this many kinds. */
 export const SALAD_MIN = 10
 export const SALAD_KINDS = 3
@@ -402,7 +442,7 @@ export const SALAD_BITES = 2
 /** It can be served from a little before nightfall (fraction of the day). */
 export const SALAD_FROM = NIGHT_START - 0.06
 /**
- * Serving it: pick the platter up at the station and carry it to the middle of the barn (SALAD_SPOT, within
+ * Serving it: pick a platter up at the station and carry it to a free spot on the barn floor (SALAD_SPOTS, within
  * PLATTER_PLACE). While it's carried, every peckish piggy within PLATTER_LURE comes wheeking along after it.
  */
 export const PLATTER_PLACE = 1.6

@@ -33,6 +33,8 @@ export type PigState =
   | 'peek'
   | 'scratch'
   | 'sneeze'
+  /** Left with the vet: on the pharmacy table being seen to, or waiting in a crate beside it. */
+  | 'vet'
   | 'held'
   | 'carried'
   | 'lost'
@@ -61,6 +63,18 @@ export interface FarmerSnap {
   atShow: boolean
   /** Carrying the salad platter (hands full). */
   platter: boolean
+}
+
+/** The gardener (an upgrade), going about the farm: what's in the basket, and whether it's busy at a job. */
+export interface GardenerSnap {
+  x: number
+  z: number
+  yaw: number
+  basket: number[]
+  hay: number
+  sack: boolean
+  /** Stopped at a job (picking, filling…) rather than walking. */
+  working: boolean
 }
 
 /** The pig show, while it's on: the car waiting, the show itself, or the results. */
@@ -174,6 +188,8 @@ export type ClientMsg =
   /** At the show: put your piggy on the judging table, or take it back once it's been judged. */
   | { t: 'judge' }
   | { t: 'fetch' }
+  /** At the vet clinic: leave the piggy you're holding with the vet. */
+  | { t: 'vet' }
 
 export type AlertKind = 'fox' | 'hawk' | 'lost' | 'home' | 'saved' | 'night' | 'day' | 'care' | 'farmer' | 'shop' | 'fun' | 'job' | 'baby' | 'rain'
 
@@ -188,6 +204,8 @@ export type ServerMsg =
       time: number
       day: number
       farmers: FarmerSnap[]
+      /** The gardener, once hired. */
+      gardener: GardenerSnap | null
       pigs: PigSnap[]
       foods: FoodSnap[]
       beds: BedSnap[]
@@ -221,8 +239,8 @@ export type ServerMsg =
       show: ShowSnap | null
       /** The squares of land the farm owns. */
       land: SquareId[]
-      /** The salad platter: veg in it (VEGGIES order), whether tonight's has been served, and bites left on the floor. */
-      salad: { veg: number[]; served: boolean; bites: number }
+      /** The salad: veg at the station (VEGGIES order), whether tonight's is being served, and bites left on each platter on the floor (SALAD_SPOTS). */
+      salad: { veg: number[]; served: boolean; bites: number[] }
     }
   /** End of a day: how it went and what it earned. */
   /** You've been driven somewhere (to the pig show, or home): your farmer is now here. */
@@ -313,6 +331,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'board':
     case 'judge':
     case 'fetch':
+    case 'vet':
     case 'putdown':
     case 'cuddle':
     case 'shoo':

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_BALE, SALAD_SPOT, HAY_RACKS, HOPPERS, rackBuilt, rackFront, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
+import { BEDS, BED_D, BED_W, BOWLS, DOOR_MID, DOOR_OUT, FEED_BIN, HAY_BALE, SALAD_SPOTS, VET_SLOTS, VET_TABLE, VET_TOP, HAY_RACKS, HOPPERS, rackBuilt, rackFront, SALAD_TABLE, dist, groundAt, hayPatchAt, hayStackAt, inRect, isInside, setLand } from '../core/map.ts'
 import type { PigLook } from '../core/pigs.ts'
 import type { ClientMsg, FarmerSnap, PigSnap, PigState, PredSnap, ServerMsg } from '../core/protocol.ts'
 import {
@@ -18,9 +18,14 @@ import {
   REACH,
   SALAD_FROM,
   PLATTER_PLACE,
+  PLATTER_MAX,
   SALAD_KINDS,
-  SALAD_MAX,
   SALAD_MIN,
+  saladMax,
+  GARDENER_NAME,
+  GARDENER_SPEED,
+  VET_QUEUE,
+  platters,
   RUN_SPEED,
   HAWK_SHOO_EXTRA,
   isSneaky,
@@ -169,6 +174,9 @@ export class Game {
 
   private pigs: PigView[] = []
   private readonly farmers = new Map<number, FarmerView>()
+  /** The gardener, once hired (drawn from the snapshot like a farmer), and the vet behind the pharmacy table. */
+  private gardener: { model: FarmerModel; x: number; z: number; yaw: number; speed: number; working: boolean } | null = null
+  private vet: FarmerModel | null = null
   private readonly foods = new Map<number, THREE.Object3D>()
   private readonly preds = new Map<number, PredView>()
   private flying: Flying[] = []
@@ -319,6 +327,14 @@ export class Game {
 
   private send(msg: ClientMsg) {
     this.net.send(msg)
+  }
+
+  /** Spots on the barn floor a salad platter can go down on: as many as the herd needs, with none there yet. */
+  private freePlatterSpots() {
+    const snap = this.snap
+    if (!snap) return []
+    const n = Math.min(SALAD_SPOTS.length, platters(snap.pigs.length))
+    return SALAD_SPOTS.map((_, i) => i).filter((i) => i < n && snap.salad.bites[i] <= 0)
   }
 
   private mySnap(): FarmerSnap | undefined {
@@ -524,7 +540,7 @@ export class Game {
     this.world.setBeds(snap.beds)
     this.world.setBowls(snap.bowls)
     this.world.setSalad(snap.salad.veg, snap.salad.bites)
-    this.world.setPlatterCarried(snap.farmers.some((f) => f.platter))
+    this.world.setPlatterCarried(snap.farmers.some((f) => f.platter), this.freePlatterSpots(), snap.salad.veg.some((n) => n > 0))
     this.world.setHoppers(snap.hoppers, hopperMax(snap.upgrades))
     this.world.setUpgrades(snap.upgrades)
     this.world.setRacks(snap.racks)
@@ -793,6 +809,47 @@ export class Game {
       v.model.pose(dt, airborne ? 0 : v.speed, s.holding !== null || s.sack, used / this.basketMax(), s.hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, airborne, s.hay > 0, s.platter)
       v.model.root.position.y += v.y
     }
+    this.updateHelpers(dt)
+  }
+
+  /** The gardener pottering about (a reach of the arm at each job), and the vet holding whoever's on the table. */
+  private updateHelpers(dt: number) {
+    const s = this.snap?.gardener ?? null
+    if (!s) {
+      this.gardener?.model.root.removeFromParent()
+      this.gardener = null
+    } else {
+      if (!this.gardener) {
+        const model = new FarmerModel(0, GARDENER_NAME, 'gardener')
+        this.world.scene.add(model.root)
+        this.gardener = { model, x: s.x, z: s.z, yaw: s.yaw, speed: 0, working: false }
+      }
+      const v = this.gardener
+      // Walks after where the server has them at their own pace (no gliding to a stop): legs and ground agree.
+      const d = Math.hypot(s.x - v.x, s.z - v.z)
+      const step = d > 4 ? d : Math.min(d, GARDENER_SPEED * 1.15 * dt)
+      if (d > 1e-4) {
+        v.x += ((s.x - v.x) / d) * step
+        v.z += ((s.z - v.z) / d) * step
+      }
+      // (Smoothed: the updates come 20 times a second, so it catches up and waits a little in between.)
+      v.speed = v.speed * 0.85 + (d > 4 ? 0 : step / Math.max(dt, 1e-3)) * 0.15
+      const k = Math.min(1, dt * 8)
+      v.yaw = lerpAngle(v.yaw, d > 0.05 && d <= 4 ? yawTowards(v, s) : s.yaw, k)
+      if (s.working && !v.working) v.model.throw()
+      v.working = s.working
+      v.model.root.position.set(v.x, 0, v.z)
+      v.model.root.rotation.y = v.yaw
+      const top = s.basket.findLastIndex((n) => n > 0)
+      const used = s.basket.reduce((a, b) => a + b, 0) + s.hay * HAY_SLOTS
+      v.model.pose(dt, v.speed, s.sack, used / this.basketMax(), s.hay ? HAY_COLOR : top < 0 ? 0 : VEG_COLOR[VEGGIES[top]], s.sack, false, s.hay > 0)
+    }
+    if (!this.vet) {
+      this.vet = new FarmerModel(0xffffff, 'The Vet', 'vet')
+      this.world.vetStand.add(this.vet.root)
+    }
+    const seeing = this.snap?.pigs.some((p) => p.s === 'vet' && dist(p, VET_SLOTS[0]) < 0.3) ?? false
+    this.vet.pose(dt, 0, seeing, 0, 0)
   }
 
   private updatePreds(dt: number) {
@@ -874,8 +931,9 @@ export class Game {
         v.x += (s.x - v.x) * k
         v.z += (s.z - v.z) * k
         v.yaw = lerpAngle(v.yaw, s.yaw, Math.min(1, dt * 8))
-        // Up on the judging table at the show.
-        m.root.position.set(v.x, s.s === 'show' ? TABLE_H : 0, v.z)
+        // Up on the judging table at the show, or the vet's table.
+        const up = s.s === 'show' ? TABLE_H : s.s === 'vet' && dist(s, VET_SLOTS[0]) < 0.3 ? VET_TOP : 0
+        m.root.position.set(v.x, up, v.z)
       }
       v.speed = v.speed * 0.7 + (Math.hypot(v.x - ox, v.z - oz) / dt) * 0.3
       m.root.rotation.y = v.yaw
@@ -931,10 +989,13 @@ export class Game {
           return say('scritch scratch', 'plain', 2)
         case 'held':
           return say(pickOne(CHUTT), 'plain', 3)
+        case 'vet':
+          return say(pickOne(['eep?', 'wheek…?', 'be gentle!', '😬']), 'plain', 4)
         case 'sleep':
           return say('zzz', 'zzz', 5)
       }
       if (was === 'lost') return say('home!', 'love', 2)
+      if (was === 'vet') return say(pickOne(['all better!', 'wheek! 💚', 'free!']), 'love', 3)
       return
     }
     if (this.clock < v.nextChatter) return
@@ -1062,8 +1123,8 @@ export class Game {
     const mine = this.mySnap()
     const car = snap.show?.phase === 'boarding' && !mine?.aboard && !sack ? dist(me, CAR_FARM) : Infinity
     if (mine?.platter) {
-      // Carrying the salad platter: to the glowing ring in the middle of the barn (or back on the station).
-      if (dist(me, SALAD_SPOT) <= PLATTER_PLACE - 0.1) best = { label: '<b>Put the salad platter down 🥗 Supper time!</b>', msg: { t: 'serve' }, d: 0 }
+      // Carrying a salad platter: to a glowing ring on the barn floor (or back on the station).
+      if (this.freePlatterSpots().some((i) => dist(me, SALAD_SPOTS[i]) <= PLATTER_PLACE - 0.1)) best = { label: '<b>Put the salad platter down 🥗 Supper time!</b>', msg: { t: 'serve' }, d: 0 }
       else if (dist(me, SALAD_TABLE) < REACH - 0.2) best = { label: 'Put the platter back on the station', msg: { t: 'serve' }, d: 0 }
       else best = { label: '🥗 Carry the platter to the glowing ring in the middle of the barn (the piggies are following you!)', msg: null, d: 0 }
     } else if (mine?.aboard || mine?.atShow) {
@@ -1071,7 +1132,22 @@ export class Game {
     } else if (holding !== null) {
       best = { label: `Place <b>${this.looks[holding].name}</b> down`, msg: { t: 'putdown' }, d: 0 }
       if (car < CAR_REACH) best = { label: `<b>Take ${this.looks[holding].name} to the pig show 🚗</b>`, msg: { t: 'board' }, d: -1 }
+      // The vet clinic: leave them for a check-up (if there's room in the queue).
+      if (snap.upgrades.includes('clinic') && dist(me, VET_TABLE) < REACH + 0.5) {
+        const waiting = snap.pigs.filter((p) => p.s === 'vet').length
+        best =
+          waiting < VET_QUEUE
+            ? { label: `<b>Leave ${this.looks[holding].name} with the vet 💊</b> (${waiting}/${VET_QUEUE} waiting)`, msg: { t: 'vet' }, d: -1 }
+            : { label: `💊 The vet’s full (${VET_QUEUE}/${VET_QUEUE}): come back in a bit`, msg: null, d: -1 }
+      }
     } else {
+      const vet = dist(me, VET_TABLE)
+      if (vet < REACH + 0.5)
+        offer(
+          snap.upgrades.includes('clinic')
+            ? { label: `💊 The vet: bring a piggy for a check-up (${snap.pigs.filter((p) => p.s === 'vet').length}/${VET_QUEUE} waiting)`, msg: null, d: vet }
+            : { label: '💊 A vet clinic can go here: it’s in the shop (Barn)', msg: null, d: vet },
+        )
       if (car < CAR_REACH) offer({ label: 'Come and watch the pig show 🚗 (or carry a piggy here to enter it)', msg: { t: 'board' }, d: -1 })
       const door = dist(me, DOOR_MID)
       if (door < REACH + 0.3) offer({ label: snap.door ? 'Open the barn door 🚪' : 'Shut the barn door 🚪', msg: { t: 'door' }, d: door - 0.5 })
@@ -1082,11 +1158,15 @@ export class Game {
         const kinds = sal.veg.filter((n) => n > 0).length
         const ready = total >= SALAD_MIN && kinds >= SALAD_KINDS
         const d = table - 0.8
-        if (sal.served) offer({ label: '🥗 Tonight’s salad is served! Make another tomorrow', msg: null, d })
-        else if (count > 0 && total < SALAD_MAX) offer({ label: `Put your veg in the salad 🥗 (${total}/${SALAD_MAX})`, msg: { t: 'salad' }, d })
-        else if (ready && snap.time >= SALAD_FROM) {
-          const carrier = snap.farmers.find((f) => f.platter)
-          offer(carrier ? { label: `🥗 ${carrier.name} has the platter: follow them in!`, msg: null, d } : { label: '<b>Pick up the salad platter 🥗 Supper time!</b>', msg: { t: 'serve' }, d })
+        const max = saladMax(snap.pigs.length)
+        const plates = platters(snap.pigs.length)
+        const carriers = snap.farmers.filter((f) => f.platter)
+        const room = this.freePlatterSpots().length > carriers.length
+        if (sal.served && total === 0) offer({ label: '🥗 Tonight’s salad is served! Make another tomorrow', msg: null, d })
+        else if (!sal.served && count > 0 && total < max) offer({ label: `Put your veg in the salad 🥗 (${total}/${max}${plates > 1 ? `, ${plates} platters` : ''})`, msg: { t: 'salad' }, d })
+        else if ((ready || (sal.served && total > 0)) && snap.time >= SALAD_FROM) {
+          if (room) offer({ label: `<b>Pick up ${sal.served || carriers.length ? 'another' : 'a'} salad platter 🥗 Supper time!</b>${total > PLATTER_MAX ? ` (${Math.ceil(total / PLATTER_MAX)} to carry in)` : ''}`, msg: { t: 'serve' }, d })
+          else offer({ label: carriers.length ? `🥗 ${carriers.map((f) => f.name).join(' and ')} ${carriers.length > 1 ? 'have' : 'has'} the platter: follow them in!` : '🥗 Wait for a platter to be eaten up, then bring the rest', msg: null, d })
         }
         else if (ready) offer({ label: `🥗 Salad’s ready (${total} veg, ${kinds} kinds): serve it at dusk`, msg: null, d })
         else offer({ label: `🥗 Salad: ${total}/${SALAD_MIN} veg, ${kinds}/${SALAD_KINDS} kinds. Bring veg from the garden!`, msg: null, d })

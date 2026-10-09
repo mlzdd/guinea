@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { lonePig, ownAll, run, seeded, setup, veg } from './helpers.ts'
 import { Farm, HOPPER_ID, RACK_ID } from '../../src/core/farm.ts'
-import { BED_SPOTS, BEDS, BOWLS, SALAD_SPOT, FEED_BIN, HAY_BALE, HAY_PATCHES, HAY_FIELD, HAY_RACKS, HAY_STACKS, HOPPERS, center, rackBuilt, rackFront, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
+import { BARN_IN, BED_SPOTS, BEDS, BOWLS, SALAD_SPOTS, FEED_BIN, HAY_BALE, HAY_PATCHES, HAY_FIELD, HAY_RACKS, HAY_STACKS, HOPPERS, center, rackBuilt, rackFront, TREES, dist, gardens, inRect, isInside, nearestFence, onFarm, pigCanStand } from '../../src/core/map.ts'
 import { parseClientMsg } from '../../src/core/protocol.ts'
 import {
   BALE_ARMFULS,
@@ -9,6 +9,8 @@ import {
   BOWL_MAX,
   GROW_MS,
   FOOD_SLEEPERS,
+  SNUGGLE,
+  SNUGGLE_RANGE,
   HARVEST_YIELD,
   HAY_ARMFUL,
   HAY_RACK_MAX,
@@ -206,6 +208,26 @@ describe('garden', () => {
 })
 
 describe('health checks', () => {
+  it('a piggy put down facing a barn wall stays inside (not through the wall)', () => {
+    // Against the back wall, both side walls and the front wall beside the door, facing it.
+    const walls = [
+      { x: 4, z: BARN_IN.z0 + 0.35, yaw: 0 },
+      { x: BARN_IN.x0 + 0.35, z: -17, yaw: Math.PI / 2 },
+      { x: BARN_IN.x1 - 0.35, z: -17, yaw: -Math.PI / 2 },
+      { x: 4, z: BARN_IN.z1 - 0.35, yaw: Math.PI },
+    ]
+    for (const w of walls) {
+      const { farm, id, me } = setup()
+      const pig = lonePig(farm, w.x, w.z, 80)
+      Object.assign(me, w)
+      farm.handle(id, { t: 'pickup', pig: 0 })
+      expect(me.holding).toBe(0)
+      farm.handle(id, { t: 'putdown' })
+      expect(me.holding).toBeNull()
+      expect(isInside(pig)).toBe(true)
+    }
+  })
+
   it('pick up a pig, treat what is wrong, cuddle, put down', () => {
     const { farm, id, me } = setup()
     const pig = lonePig(farm, 2, 2, 80)
@@ -362,9 +384,29 @@ describe('day and night', () => {
     ).toBe(true)
     const asleep = last.filter((p) => p.state === 'sleep')
     expect(asleep.length).toBeGreaterThan(farm.pigs.length / 2)
-    const astray = asleep.filter((p) => !BED_SPOTS.some((b) => dist(p, b) < 1.3))
+    // At a bed spot, or curled up with others near one.
+    const atBed = (p: { x: number; z: number }, d = 1.3) => BED_SPOTS.some((b) => dist(p, b) < d)
+    const astray = asleep.filter((p) => !atBed(p) && !(atBed(p, SNUGGLE_RANGE + 0.1) && asleep.some((o) => o !== p && dist(o, p) < SNUGGLE + 0.1)))
     expect(astray.length).toBeLessThanOrEqual(FOOD_SLEEPERS)
-    for (const p of astray) expect([...BOWLS, ...HOPPERS, SALAD_SPOT].some((f) => dist(p, f) < 1.5)).toBe(true)
+    for (const p of astray) expect([...BOWLS, ...HOPPERS, ...SALAD_SPOTS].some((f) => dist(p, f) < 1.5)).toBe(true)
+  })
+
+  it('every piggy has a bed spot of its own', () => {
+    const { farm } = setup()
+    const spots = new Set(farm.pigs.map((p) => farm['bedSpot'](p)))
+    expect(spots.size).toBe(Math.min(farm.pigs.length, BED_SPOTS.length))
+  })
+
+  it('a big herd all gets to sleep (curling up together, not pacing round each other), so the night is skipped', () => {
+    for (const seed of [1, 2, 3])
+      for (const n of [12, 24, 36]) {
+        const { farm } = setup(seed)
+        farm.pigs.push(...Array.from({ length: n - 12 }, (_, i) => ({ ...farm.pigs[i % 12], id: 12 + i, path: [], follow: null })))
+        farm.t = farmTime(NIGHT_START) + 1000
+        farm.pigs.forEach((p, i) => Object.assign(p, { x: -8 + (i % 8) * 2, z: -20 + Math.floor(i / 8) * 1.5, hunger: 95, state: 'idle', until: farm.t + 100 }))
+        // Day 1's night is about a minute: well before dawn.
+        expect(run(farm, 40_000, () => farm.day === 2), `seed ${seed}, ${n} pigs`).toBe(true)
+      }
   })
 
   it('the night is not skipped while a pig is still up, or a fox is about', () => {

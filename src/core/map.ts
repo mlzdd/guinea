@@ -102,9 +102,10 @@ export const HAY_RACKS: HayRack[] = [
   // Barn improvements: one inside by the door and one outside on the right…
   { x: -8.8, z: -10.95, face: 'n', len: 3, barn: 1 },
   { x: 7, z: -9.45, face: 's', len: 3, barn: 1 },
-  // …and two more on the side walls, between the hoppers and the front houses.
+  // …and two more: on the left wall between the hopper and the front house, and inside the front wall right of the
+  // door (the right wall there has the vet clinic).
   { x: -10.95, z: -16.4, face: 'e', len: 2.4, barn: 2 },
-  { x: 10.95, z: -16.4, face: 'w', len: 2.4, barn: 2 },
+  { x: 10.1, z: -10.95, face: 'n', len: 2.2, barn: 2 },
 ]
 /** Where pigs eat a rack's hay: the floor in front of it. */
 export const rackFront = (r: HayRack, d = 0.5): P => ({ x: r.x + FACE[r.face].x * d, z: r.z + FACE[r.face].z * d })
@@ -116,8 +117,32 @@ export const FEED_BIN: P = { x: 5, z: -11.4 }
 export const HAY_BALE: P = { x: 7.3, z: -11.4 }
 /** The salad station, the other side of the door: farmers build the evening salad platter here… */
 export const SALAD_TABLE: P = { x: -5, z: -11.4 }
-/** …and serve it here, in the middle of the barn floor. */
-export const SALAD_SPOT: P = { x: 0, z: -17 }
+/** …and serve it here, in the middle of the barn floor (and either side of it, when it takes more than one platter). */
+export const SALAD_SPOTS: P[] = [
+  { x: 0, z: -17 },
+  { x: -5, z: -16.5 },
+  { x: 5, z: -16.5 },
+]
+export const SALAD_SPOT = SALAD_SPOTS[0]
+/**
+ * The vet clinic (an upgrade): a pharmacy table along the right-hand wall of the barn (between the front right pig house
+ * and the second hopper), with the vet behind it against the wall, all facing into the barn (VET_FACE). The piggy being
+ * seen to sits on the table (VET_TOP high); the others wait in two crates in front of it. Always solid (before it's
+ * bought it's an empty table with a sign).
+ */
+export const VET_WALL: P = { x: 11.6, z: -16.5 }
+export const VET_FACE = Math.PI / 2
+export const VET_TABLE: P = { x: 10.65, z: -16.5 }
+export const VET_TOP = 0.82
+export const VET_SPOT: P = { x: 11.25, z: -16.5 }
+export const VET_SLOTS: P[] = [VET_TABLE, { x: 9.9, z: -15.95 }, { x: 9.9, z: -17.05 }]
+export const VET_BLOCK = r(9.5, 11.6, -17.3, -15.7)
+/** Where a piggy goes once the vet's done with it. */
+export const VET_OUT: P = { x: 8.6, z: -16.5 }
+
+/** Where the gardener stands when there's nothing to do (and all night). */
+export const GARDENER_HOME: P = { x: 2.5, z: -2 }
+
 /** Little wooden houses inside the barn, where pigs like to sleep. Not solid. */
 export const PIG_HOUSES: P[] = [
   { x: -9.3, z: -14 },
@@ -139,7 +164,8 @@ export const BED_SPOTS: P[] = [
   ...[-1, 1].flatMap((side) => [
     { x: side * 10.7, z: -24.3 },
     { x: side * 10.7, z: -11.3 },
-    { x: side * 10.4, z: -16.4 },
+    // (On the right, the vet clinic's there.)
+    ...(side < 0 ? [{ x: side * 10.4, z: -16.4 }] : []),
     { x: side * 10.4, z: -21 },
   ]),
   ...[-8, 0, 8].flatMap((x) => [
@@ -373,11 +399,12 @@ export function setLand(ids: readonly SquareId[]) {
   HUT_SOLIDS.clear()
   for (const w of huts) HUT_SOLIDS.add(w)
   const tubes = tunnels().flatMap(tunnelWalls)
-  fill(PIG_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...huts, ...tubes])
-  fill(FOX_SOLIDS, [...BARN_WALLS, ...gardens, ...trees, ...pond, DOOR_GATE])
+  fill(PIG_SOLIDS, [...BARN_WALLS, VET_BLOCK, ...gardens, ...trees, ...field, ...pond, ...FENCE, ...huts, ...tubes])
+  fill(FOX_SOLIDS, [...BARN_WALLS, VET_BLOCK, ...gardens, ...trees, ...pond, DOOR_GATE])
   const tall = (h: number) => (b: Rect): Block => ({ ...b, h })
   fill(FARMER_BLOCKS, [
     ...BARN_WALLS.map(tall(TALL)),
+    tall(TALL)(VET_BLOCK),
     ...trees.map(tall(TALL)),
     ...pond.map(tall(TALL)),
     ...gardens.flatMap((g) => g.fence).map(tall(0.75)),

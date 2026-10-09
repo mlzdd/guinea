@@ -29,7 +29,14 @@ import {
   HAY_BALE,
   HOPPERS,
   POND,
-  SALAD_SPOT,
+  SALAD_SPOTS,
+  VET_BLOCK,
+  VET_SLOTS,
+  VET_SPOT,
+  VET_TABLE,
+  VET_TOP,
+  VET_WALL,
+  VET_FACE,
   SALAD_TABLE,
   SCARECROW,
   SQUARES,
@@ -40,7 +47,7 @@ import {
   type Rect,
 } from '../core/map.ts'
 import type { BedSnap } from '../core/protocol.ts'
-import { BALE_ARMFULS, BOWL_MAX, hayRackMax, hayStackMax, LAND_UPGRADES, UPGRADES, landLevel, LAND, NIGHT_START, level, SALAD_BITES, SALAD_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
+import { BALE_ARMFULS, BOWL_MAX, hayRackMax, hayStackMax, LAND_UPGRADES, UPGRADES, landLevel, LAND, NIGHT_START, level, SALAD_BITES, PLATTER_MAX, START_LAND, VEGGIES, type SquareId, type UpgradeId, type Veg } from '../core/rules.ts'
 import { makeVeg, mat } from './veg.ts'
 import { FAST } from './device.ts'
 
@@ -358,6 +365,10 @@ export class World {
   /** Things that appear when an upgrade is bought. */
   private readonly landFeatures = {} as Record<SquareId, THREE.Group[]>
   private readonly extras: Partial<Record<UpgradeId, THREE.Object3D>> = {}
+  /** Where the vet stands behind the pharmacy table (game.ts puts the vet in): only there once the clinic's bought. */
+  readonly vetStand = new THREE.Group()
+  /** The empty table's sign before then. */
+  private clinicForSale: THREE.Object3D | null = null
   /** Each square's things (shown once it's bought), and its long grass and for-sale sign (until then). */
   private readonly content = {} as Record<SquareId, THREE.Group>
   private readonly wild = {} as Record<SquareId, THREE.Group>
@@ -370,14 +381,14 @@ export class World {
   private readonly fence = new THREE.Group()
   private readonly wire = new THREE.Group()
   private readonly ducks: THREE.Group[] = []
-  /** The salad being made on the station's platter, and the one served on the barn floor. */
+  /** The salad being made on the station's platter, and the ones served on the barn floor (one per SALAD_SPOTS). */
   private readonly saladMaking = new THREE.Group()
-  private readonly saladServed = new THREE.Group()
+  private readonly saladServed = SALAD_SPOTS.map(() => new THREE.Group())
   private saladKey = ''
-  private saladFloor: THREE.Group | null = null
-  /** The station's own platter (gone while someone's carrying it about), and the glowing ring where it goes down. */
+  private readonly saladFloor: THREE.Group[] = []
+  /** The station's own platter (gone while someone's carrying the last of it about), and the glowing rings where they go down. */
   private stationPlatter = new THREE.Group()
-  private readonly platterRing = new THREE.Group()
+  private readonly platterRings = SALAD_SPOTS.map(() => new THREE.Group())
   /** Hay in each rack (and the bit on the floor in front that pigs eat), and the sacks on the feed bin. */
   private readonly racks: { root: THREE.Group; hay: THREE.Mesh; floor: THREE.Mesh; deep: THREE.Group }[] = []
   private readonly binSacks: THREE.Mesh[] = []
@@ -452,6 +463,7 @@ export class World {
     this.buildSurroundings()
     this.buildPellets()
     this.buildSaladStation()
+    this.buildClinic()
     this.buildLandImprovements()
     this.buildExtras()
     this.rain = this.buildRain()
@@ -1138,15 +1150,18 @@ export class World {
     table.add(sign)
     this.scene.add(table)
 
-    const floor = new THREE.Group()
-    floor.position.set(SALAD_SPOT.x, 0, SALAD_SPOT.z)
-    floor.add(plate(1.1).translateY(0.04))
-    this.saladServed.position.y = 0.08
-    floor.add(this.saladServed)
-    this.scene.add(floor)
-    this.saladFloor = floor
+    SALAD_SPOTS.forEach((s, i) => {
+      const floor = new THREE.Group()
+      floor.position.set(s.x, 0, s.z)
+      floor.add(plate(1.1).translateY(0.04))
+      this.saladServed[i].position.y = 0.08
+      floor.add(this.saladServed[i])
+      floor.visible = false
+      this.scene.add(floor)
+      this.saladFloor.push(floor)
+    })
 
-    // Where the platter goes: a glowing ring on the barn floor, pulsing while someone's carrying it.
+    // Where the platters go: glowing rings on the barn floor, pulsing while someone's carrying one.
     const glow = new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.85, depthWrite: false })
     const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.4, 40), glow)
     const inner = new THREE.Mesh(new THREE.CircleGeometry(1.15, 40), new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.22, depthWrite: false }))
@@ -1158,21 +1173,108 @@ export class World {
     inner.position.y = 0.05
     const label = this.sign('🥗 Supper goes here!', 2.2, 0.45)
     label.position.y = 1.4
-    this.platterRing.add(ring, inner, label)
-    this.platterRing.position.set(SALAD_SPOT.x, 0, SALAD_SPOT.z)
-    this.platterRing.visible = false
-    this.scene.add(this.platterRing)
+    SALAD_SPOTS.forEach((s, i) => {
+      const r = this.platterRings[i]
+      r.add(i ? ring.clone() : ring, i ? inner.clone() : inner, i ? label.clone() : label)
+      r.position.set(s.x, 0, s.z)
+      r.visible = false
+      this.scene.add(r)
+    })
   }
 
-  /** Someone's carrying the salad platter about: off the station, and the ring showing where it goes. */
-  setPlatterCarried(on: boolean) {
-    this.stationPlatter.visible = !on
-    this.platterRing.visible = on
+  /**
+   * The vet clinic along the right-hand wall of the barn: a white pharmacy table (always there; solid), and once bought
+   * the vet behind it, a green-cross pharmacy sign on the wall, a shelf of bottles and two crates in front for the
+   * piggies waiting their turn. Built facing +Z, then turned to face into the barn (VET_FACE), from the wall.
+   */
+  private buildClinic() {
+    const wood = new THREE.MeshLambertMaterial({ map: plankTex })
+    // Local frame: x along the wall (towards the front of the barn), z out from the wall.
+    const frame = (g: THREE.Object3D) => {
+      g.position.set(VET_WALL.x, 0, VET_WALL.z)
+      g.rotation.y = VET_FACE - Math.PI
+      return g
+    }
+    const out = (p: { x: number; z: number }) => ({ x: p.z - VET_WALL.z, z: VET_WALL.x - p.x })
+    const len = VET_BLOCK.z1 - VET_BLOCK.z0
+    const at = out(VET_TABLE)
+    const table = frame(new THREE.Group())
+    const top = shadowed(new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.7), mat(0xf4f6f4)))
+    top.position.set(at.x, VET_TOP - 0.04, at.z)
+    const front = shadowed(new THREE.Mesh(new THREE.BoxGeometry(len - 0.1, VET_TOP - 0.1, 0.6), mat(0xdfe8e4)))
+    front.position.set(at.x, (VET_TOP - 0.1) / 2, at.z)
+    table.add(top, front)
+    // A green cross on the front.
+    for (const [sx, sy] of [
+      [0.36, 0.12],
+      [0.12, 0.36],
+    ])
+      table.add(new THREE.Mesh(new THREE.BoxGeometry(sx, sy, 0.02), mat(0x2fae5a)).translateX(at.x).translateY(0.42).translateZ(at.z + 0.31))
+    this.scene.add(table)
+
+    const clinic = frame(new THREE.Group())
+    // The pharmacy sign up on the wall, with a glowing green cross over it, and a shelf of bottles.
+    const sign = this.sign('✚ Pharmacy · Vet', 2.4, 0.5)
+    sign.position.set(0, 2.3, 0.05)
+    clinic.add(sign)
+    const green = new THREE.MeshBasicMaterial({ color: 0x3ad16a })
+    const cross = new THREE.Group()
+    cross.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.05), green))
+    cross.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.05), green))
+    cross.position.set(0, 2.95, 0.05)
+    clinic.add(cross)
+    const shelf = shadowed(new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.25), wood))
+    shelf.position.set(0, 1.65, 0.15)
+    clinic.add(shelf)
+    ;[0xd84a4a, 0x4a8ad8, 0xf2c230, 0x3cc45a, 0xa25ce0, 0xf6efe0].forEach((c, i) => {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.2, 10), mat(c))
+      b.position.set(-0.65 + i * 0.26, 1.78, 0.15)
+      clinic.add(b)
+    })
+    // A little towel on the table for the piggy.
+    const towel = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.02, 0.45), mat(0x8fd0e8))
+    towel.position.set(at.x, VET_TOP + 0.01, at.z)
+    clinic.add(towel)
+    // Crates in front, for the ones waiting (open at the front).
+    for (const s of VET_SLOTS.slice(1)) {
+      const c = out(s)
+      const crate = new THREE.Group()
+      crate.position.set(c.x, 0, c.z)
+      crate.add(shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.06, 0.7), wood)).translateY(0.03))
+      for (const [x, z, sx, sz] of [
+        [0, -0.33, 0.7, 0.04],
+        [-0.33, 0, 0.04, 0.7],
+        [0.33, 0, 0.04, 0.7],
+      ])
+        crate.add(shadowed(new THREE.Mesh(new THREE.BoxGeometry(sx, 0.32, sz), wood)).translateX(x).translateY(0.16).translateZ(z))
+      clinic.add(crate)
+    }
+    const v = out(VET_SPOT)
+    this.vetStand.position.set(v.x, 0, v.z)
+    this.vetStand.rotation.y = Math.PI // facing out into the barn
+    clinic.add(this.vetStand)
+    clinic.visible = false
+    this.scene.add(clinic)
+    this.extras.clinic = clinic
+
+    const forSale = this.sign('💊 Vet clinic: in the shop', 2.4, 0.45)
+    forSale.position.set(at.x, 1.5, at.z)
+    this.scene.add(frame(new THREE.Group()).add(forSale))
+    this.clinicForSale = forSale
+  }
+
+  /**
+   * Someone's carrying a salad platter about: rings on the free spots showing where it goes, and the station's
+   * platter gone if that was the last of the salad.
+   */
+  setPlatterCarried(on: boolean, free: number[], left: boolean) {
+    this.stationPlatter.visible = !on || left
+    this.platterRings.forEach((r, i) => (r.visible = on && free.includes(i)))
   }
 
   /** Fills the platters: veg being made up on the station, and what's left of tonight's on the floor. */
-  setSalad(veg: number[], bites: number) {
-    const key = `${veg.join()}|${bites}`
+  setSalad(veg: number[], bites: number[]) {
+    const key = `${veg.join()}|${bites.join()}`
     if (key === this.saladKey) return
     this.saladKey = key
     const pile = (g: THREE.Group, kinds: Veg[], n: number, radius: number, scale: number) => {
@@ -1190,8 +1292,10 @@ export class World {
     const making = VEGGIES.filter((_, i) => veg[i] > 0)
     const total = veg.reduce((a, b) => a + b, 0)
     pile(this.saladMaking, making, Math.min(14, total), 0.42, 0.55)
-    pile(this.saladServed, [...VEGGIES], Math.ceil((Math.min(1, bites / (SALAD_MAX * SALAD_BITES)) * 26)), 0.9, 0.8)
-    if (this.saladFloor) this.saladFloor.visible = bites > 0
+    bites.forEach((b, i) => {
+      pile(this.saladServed[i], [...VEGGIES], Math.ceil(Math.min(1, b / (PLATTER_MAX * SALAD_BITES)) * 26), 0.9, 0.8)
+      this.saladFloor[i].visible = b > 0
+    })
   }
 
   // ---------------------------------------------------------------- things that change
@@ -1207,7 +1311,7 @@ export class World {
   /** Per-frame animation: the gate swinging and the rain falling. */
   update(dt: number, focus: THREE.Vector3) {
     this.clock += dt
-    if (this.platterRing.visible) this.platterRing.children[0].scale.setScalar(1 + Math.sin(this.clock * 5) * 0.08)
+    for (const r of this.platterRings) if (r.visible) r.children[0].scale.setScalar(1 + Math.sin(this.clock * 5) * 0.08)
     const c = center(POND)
     this.ducks.forEach((d, i) => {
       const a = this.clock * (0.25 + i * 0.1) + i * 2.5
@@ -1581,6 +1685,7 @@ export class World {
       g.visible = this.land.includes(sq.id) && landLevel(owned, sq.id) > i
     })
     for (const [id, obj] of Object.entries(this.extras)) obj.visible = owned.includes(id as UpgradeId)
+    if (this.clinicForSale) this.clinicForSale.visible = !owned.includes('clinic')
     for (const sq of SQUARES) this.sprinklers[sq.id].visible = owned.includes('sprinkler') && this.land.includes(sq.id)
     // Bigger hoppers are taller.
     for (const h of this.hoppers) h.body.scale.y = 1 + 0.25 * level(owned, 'bighopper')
