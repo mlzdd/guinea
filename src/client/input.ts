@@ -13,7 +13,7 @@ const TAP_SLOP = 14
 
 /**
  * Keyboard and mouse, and touch. No pointer lock: the mouse aims at the ground and clicks buttons in the
- * health-check card like any web page. A click does what E does (or throws, if there's nothing to do), the wheel
+ * health-check card like any web page. A click throws veg (E does the action), the wheel
  * zooms. The camera never turns.
  *
  * On a touch screen: the stick stays put in the bottom left corner (a thumb on it, or just round it, pushes it; all

@@ -208,16 +208,15 @@ export class Game {
     this.bubbles = new Bubbles(this.world.scene)
     this.hall = new ShowHall(this.world.scene)
     this.input = new Input(canvas)
-    // A click does what E would; with nothing to do, it throws.
+    // A mouse click throws (E does the action; touch has its own buttons, and taps throw below).
     this.input.onClick = () => {
       if (this.snap?.paused) return
-      if (this.action?.msg) this.act()
-      else this.throwVeg()
+      this.throwVeg()
     }
     // A tap on a touch screen throws there (the action has its own button, and the prompt can be tapped).
     this.input.onTap = () => {
       if (this.snap?.paused || !this.me.model) return
-      // Holding a piggy (the check card's up): a tap off the card places it down, like a click does.
+      // Holding a piggy (the check card's up): a tap off the card places it down.
       // (Not with the card tucked away: then you're walking about with it.)
       if (this.holding() !== null) return this.hud.checkOpen ? this.send({ t: 'putdown' }) : undefined
       // Hands full or nothing to throw: a stray tap does nothing (no telling off).
@@ -617,7 +616,7 @@ export class Game {
     this.send({ t: 'diary' })
   }
 
-  /** E or left click: whatever the prompt offers. */
+  /** E: whatever the prompt offers. */
   private act() {
     if (this.action?.msg) this.send(this.action.msg)
   }
